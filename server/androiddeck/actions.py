@@ -23,10 +23,25 @@ class ActionError(Exception):
     pass
 
 
+def launch_env() -> dict[str, str] | None:
+    """Environment for programs started from a PyInstaller build on Linux (None = inherit)."""
+    # The bootloader points LD_LIBRARY_PATH at the bundled libraries; desktop programs must get the
+    # original value back, or they may load the wrong libssl/libz and fail to start.
+    if not (sys.platform.startswith("linux") and getattr(sys, "frozen", False)):
+        return None
+    env = dict(os.environ)
+    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if orig is not None:
+        env["LD_LIBRARY_PATH"] = orig
+    else:
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def _popen_detached(args: list[str] | str, shell: bool = False) -> None:
     kwargs: dict[str, Any] = {
         "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-        "shell": shell,
+        "shell": shell, "env": launch_env(),
     }
     if sys.platform == "win32":
         # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP

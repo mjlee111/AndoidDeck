@@ -1,7 +1,8 @@
 """End-to-end smoke test for the PC server.
 
 Starts `python -m androiddeck` in an isolated ANDROIDDECK_HOME, then exercises TLS pinning,
-discovery, pairing, the app index + icons, the profile API and the WebSocket channel. It never
+discovery, pairing, the app index + icons, the profile API, the WebSocket channel and the local
+control panel (PIN, new PIN, unpairing). It never
 sends actions with side effects (no app launches, key presses, clicks or volume changes).
 
 Usage: python tests/smoke_test.py [--min-apps N] [--min-icons N] [--exe path/to/AndroidDeckServer]
@@ -191,6 +192,52 @@ async def run_checks(base: str, home: Path, args: argparse.Namespace, check: Che
             check(stats is not None and 0 <= stats["cpu"]["percent"] <= 100 and stats["mem"]["total"] > 0,
                   "stats are pushed", None if stats is None else
                   f"cpu={stats['cpu']['percent']} mem={stats['mem']['percent']} gpus={len(stats['gpus'])} disks={len(stats['disks'])}")
+
+        await panel_checks(s, base, home, headers, check)
+
+
+async def panel_checks(s: aiohttp.ClientSession, base: str, home: Path, headers: dict, check: Check) -> None:
+    """Local control panel on 127.0.0.1: shows the PIN, makes a new one, unpairs phones."""
+    panel_json = home / "panel.json"
+    url = json.loads(panel_json.read_text(encoding="utf-8")).get("url", "") if panel_json.exists() else ""
+    check(url.startswith("http://127.0.0.1:"), "control panel URL is published", url or None)
+    if not url.startswith("http://127.0.0.1:"):
+        return
+    pin = json.loads((home / "config.json").read_text(encoding="utf-8"))["pin"]
+    async with aiohttp.ClientSession() as p:
+        async with p.get(url) as r:
+            page = await r.text()
+            check(r.status == 200 and "Pairing PIN" in page, "control panel page loads", r.status)
+        async with p.get(url.rsplit("/", 2)[0] + "/not-the-token/api/state") as r:
+            check(r.status == 404, "control panel needs its secret path", r.status)
+        async with p.get(url + "api/state", headers={"Host": "attacker.example"}) as r:
+            check(r.status == 403, "control panel rejects foreign Host headers", r.status)
+        async with p.post(url + "api/new-pin", json={}, headers={"Origin": "http://attacker.example"}) as r:
+            check(r.status == 403, "control panel rejects cross-site requests", r.status)
+        async with p.post(url + "api/new-pin", json={}) as r:
+            st = await r.json()
+        saved = json.loads((home / "config.json").read_text(encoding="utf-8"))["pin"]
+        check(r.status == 200 and st.get("pin") != pin and st.get("pin") == saved, "New PIN from the control panel")
+
+        async with s.ws_connect(base + "/ws", headers=headers) as ws:
+            await asyncio.wait_for(ws.receive_json(), 10)  # welcome
+            async with p.get(url + "api/state") as r:
+                st = await r.json()
+            dev = next((d for d in st.get("devices", []) if d.get("name") == "ci-smoke"), None)
+            check(dev is not None and dev.get("online") is True, "control panel lists the connected phone", dev)
+            if dev is None:
+                return
+            async with p.post(url + "api/unpair", json={"id": dev["id"]}) as r:
+                st = await r.json()
+                check(r.status == 200 and not st.get("devices"), "unpair from the control panel", r.status)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                msg = await ws.receive(timeout=10)
+                if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                    break
+            check(ws.close_code == 4401, "unpairing closes the phone's session", ws.close_code)
+        async with s.get(base + "/api/profile", headers=headers) as r:
+            check(r.status == 401, "unpaired phone's token is rejected", r.status)
 
 
 def main() -> int:

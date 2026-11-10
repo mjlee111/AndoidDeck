@@ -71,9 +71,10 @@ def wol_info(local_ip: str | None) -> dict[str, str] | None:
 
 
 class Client:
-    def __init__(self, ws: web.WebSocketResponse, device: str):
+    def __init__(self, ws: web.WebSocketResponse, device: str, record: dict[str, Any]):
         self.ws = ws
         self.device = device
+        self.record = record  # entry in Config.devices; gone once the phone is unpaired
         self.stats = False
         self.mixer = False
         self._lock = asyncio.Lock()
@@ -108,8 +109,10 @@ class DeckServer:
         self._pair_failures: dict[str, tuple[int, float]] = {}
         self._last: dict[str, Any] = {}
         self._tasks: list[asyncio.Task] = []
+        self._closing: set[asyncio.Task] = set()
         self._discovery = None
         self.on_paired: Callable[[str], None] | None = None
+        self.panel: Any = None  # ControlPanel, started and stopped with the app
 
     # ---- info ---------------------------------------------------------------------------------
 
@@ -136,6 +139,17 @@ class DeckServer:
             "media": self.media.supported,
             "commands": self.cfg.allow_commands,
         }
+
+    def drop_unpaired(self) -> None:
+        """Closes sessions of phones that are no longer paired. Call on the server loop; does not wait."""
+        live = {id(d) for d in self.cfg.devices.values()}
+        loop = asyncio.get_running_loop()
+        for ws, client in list(self.clients.items()):
+            if id(client.record) not in live and not ws.closed:
+                log.info("Disconnecting unpaired device: %s", client.device)
+                task = loop.create_task(ws.close(code=4401, message=b"unpaired"))
+                self._closing.add(task)
+                task.add_done_callback(self._closing.discard)
 
     @property
     def short_fingerprint(self) -> str:
@@ -175,6 +189,11 @@ class DeckServer:
         return app
 
     async def _on_startup(self, _app: web.Application) -> None:
+        if self.panel is not None:
+            try:
+                await self.panel.start()
+            except OSError as e:
+                log.warning("Control panel unavailable: %s", e)
         self.apps.start_scan()
         if self.discovery_enabled:
             self._discovery = await start_discovery(DISCOVERY_PORT, self.info)
@@ -193,6 +212,8 @@ class DeckServer:
         for ws in list(self.clients):
             await ws.close()
         self.monitor.close()
+        if self.panel is not None:
+            await self.panel.stop()
 
     # ---- handlers -----------------------------------------------------------------------------
 
@@ -286,7 +307,7 @@ class DeckServer:
     async def h_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=15, max_msg_size=1 << 20)
         await ws.prepare(request)
-        client = Client(ws, request["device"].get("name", "?"))
+        client = Client(ws, request["device"].get("name", "?"), request["device"])
         log.info("Connected: %s (%s)", client.device, request.remote)
         try:
             volume = await self.audio.get()

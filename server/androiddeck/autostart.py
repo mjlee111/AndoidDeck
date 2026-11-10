@@ -2,29 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import plistlib
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import Config
+
+log = logging.getLogger(__name__)
 
 APP_NAME = "AndroidDeck"
 MAC_LABEL = "dev.menggu.androiddeck.server"
 
 
 def launch_command() -> list[str]:
-    """Command that starts the server in tray mode, for the current installation."""
+    """Command that starts the server in tray mode at login, for the current installation."""
     if getattr(sys, "frozen", False):
         exe = sys.executable
         # Inside a macOS .app bundle, launch the bundle binary itself.
-        return [exe, "--tray"]
+        return [exe, "--tray", "--login"]
     py = sys.executable
     if sys.platform == "win32":
         pyw = Path(py).with_name("pythonw.exe")
         if pyw.exists():
             py = str(pyw)  # no console window at login
     runner = Path(__file__).resolve().parent.parent / "run_server.py"
-    return [py, str(runner), "--tray"]
+    return [py, str(runner), "--tray", "--login"]
 
 
 def _linux_file() -> Path:
@@ -57,6 +64,19 @@ def is_enabled() -> bool:
     if sys.platform == "darwin":
         return _mac_file().exists()
     return _linux_file().exists()
+
+
+def ensure_default(cfg: Config) -> None:
+    """Turns start-at-login on the first time the tray app runs, and keeps its path current."""
+    if os.environ.get("ANDROIDDECK_HOME"):
+        return  # portable/test home: the login entry would not carry it
+    if not cfg.autostart_offered:
+        set_enabled(True)
+        cfg.autostart_offered = True
+        cfg.save()
+        log.info("Start at login turned on (change it in the control panel or tray menu)")
+    elif is_enabled():
+        set_enabled(True)  # rewrite, in case the app was moved or updated
 
 
 def set_enabled(on: bool) -> None:

@@ -91,6 +91,8 @@ class Config:
         self.key_backend: str = data.get("key_backend") or "auto"
         self.allow_commands: bool = bool(data.get("allow_commands", True))
         self.devices: dict[str, dict[str, Any]] = data.get("devices") or {}
+        # Set once start-at-login has been turned on by default, so a later opt-out is respected.
+        self.autostart_offered: bool = bool(data.get("autostart_offered", False))
         self.save()
 
     def to_dict(self) -> dict[str, Any]:
@@ -102,6 +104,7 @@ class Config:
             "key_backend": self.key_backend,
             "allow_commands": self.allow_commands,
             "devices": self.devices,
+            "autostart_offered": self.autostart_offered,
         }
 
     def save(self) -> None:
@@ -141,6 +144,12 @@ class Config:
             dev["last_seen"] = now
             self.save()
         return dev
+
+    def revoke(self, key: str) -> bool:
+        if self.devices.pop(key, None) is None:
+            return False
+        self.save()
+        return True
 
     def revoke_all(self) -> None:
         self.devices = {}

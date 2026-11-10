@@ -56,6 +56,7 @@ def banner(cfg: Config, port: int, fingerprint: str) -> str:
         f"  Paired       {len(cfg.devices)} device(s)",
         "  " + "─" * 48,
         "  Open AndroidDeck on your phone (same network) and pair with the PIN.",
+        "  The control panel URL (PIN, phones, start at login) is logged below.",
         "  The phone shows the same fingerprint; they must match.",
         "  Press Ctrl+C to stop.",
         "",
@@ -103,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-discovery", action="store_true", help="disable UDP LAN discovery")
     p.add_argument("--tray", action="store_true", help="run with a system tray icon instead of a console")
     p.add_argument("--console", action="store_true", help="force console mode (packaged builds default to tray)")
+    p.add_argument("--login", action="store_true", help="started at login: stay in the tray, open no window")
     p.add_argument("--autostart", choices=["on", "off", "status"], help="start the tray app at login, then exit")
     p.add_argument("--paths", action="store_true", help="print config/cache locations and exit")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -122,6 +124,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Start at login: {'on' if autostart.is_enabled() else 'off'}")
         return 0
 
+    from .panel import ControlPanel, running_panel_url
+
+    if tray:
+        # Starting the app again while it runs reopens its control panel (PIN, phones, start at login).
+        url = running_panel_url()
+        if url is not None:
+            logging.getLogger(__name__).info("AndroidDeck is already running: %s", url)
+            if not args.login:
+                from .actions import open_uri
+
+                open_uri(url)
+            return 0
+
     cfg = Config()
     if args.name:
         cfg.name = args.name
@@ -136,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     from .server import DeckServer
 
     server = DeckServer(cfg, port, discovery=not args.no_discovery)
+    panel = ControlPanel(server, lan_ips)
+    server.panel = panel
     print(banner(cfg, port, server.short_fingerprint), flush=True)
 
     if tray:
@@ -143,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
 
         ips = lan_ips()
         try:
-            return run_tray(server, cfg, args.host, port, f"{ips[0] if ips else args.host}:{port}")
+            return run_tray(server, cfg, panel, args.host, port, f"{ips[0] if ips else args.host}:{port}", args.login)
         except OSError as e:
             logging.getLogger(__name__).error("Cannot listen on %s:%d: %s", args.host, port, e)
             return 1
@@ -152,7 +169,11 @@ def main(argv: list[str] | None = None) -> int:
         web.run_app(server.build_app(), host=args.host, port=port, ssl_context=server.ssl_context(),
                     print=None, access_log=None, handle_signals=True)
     except OSError as e:
-        print(f"Cannot listen on {args.host}:{port}: {e}\nTry another port with --port.", file=sys.stderr)
+        hint = "Try another port with --port."
+        url = running_panel_url()
+        if url is not None:
+            hint = f"AndroidDeck is already running; its control panel: {url}"
+        print(f"Cannot listen on {args.host}:{port}: {e}\n{hint}", file=sys.stderr)
         return 1
     return 0
 

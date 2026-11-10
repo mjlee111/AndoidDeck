@@ -93,10 +93,18 @@ fun SettingsSheet(vm: DeckViewModel, client: DeckClient?, onDismiss: () -> Unit,
 
             SectionLabel("Button size")
             Segmented(
-                options = listOf(0 to "Small", 1 to "Medium", 2 to "Large"),
-                selected = settings.tileSize,
-                onSelect = { v -> vm.updateSettings { it.copy(tileSize = v) } },
+                options = listOf(-1 to "Auto", 0 to "Small", 1 to "Medium", 2 to "Large"),
+                selected = if (settings.autoFit) -1 else settings.tileSize,
+                onSelect = { v ->
+                    vm.updateSettings { if (v < 0) it.copy(autoFit = true) else it.copy(autoFit = false, tileSize = v) }
+                },
             )
+            if (settings.autoFit) {
+                Text(
+                    "Buttons grow to fill the screen and stay centered; very full pages scroll.",
+                    style = MaterialTheme.typography.bodySmall, color = p.textDim, modifier = Modifier.padding(top = 6.dp),
+                )
+            }
             SectionLabel("Theme")
             Segmented(
                 options = listOf(0 to "System", 1 to "Dark", 2 to "Light"),
@@ -108,6 +116,9 @@ fun SettingsSheet(vm: DeckViewModel, client: DeckClient?, onDismiss: () -> Unit,
             ToggleRow("Haptic feedback", "Vibrate on button press", settings.haptics) { v -> vm.updateSettings { it.copy(haptics = v) } }
             ToggleRow("Keep screen on", "Useful when the phone sits on a stand", settings.keepScreenOn) { v ->
                 vm.updateSettings { it.copy(keepScreenOn = v) }
+            }
+            ToggleRow("Full screen", "Hide the status and navigation bars; swipe from an edge to show them", settings.fullScreen) { v ->
+                vm.updateSettings { it.copy(fullScreen = v) }
             }
 
             SectionLabel("Trackpad")

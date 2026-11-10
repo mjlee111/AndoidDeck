@@ -33,7 +33,9 @@ The deck layout is **stored on each PC** (each PC has different apps installed).
 
 ### 1. Run the server on the PC
 
-**Standalone executable (recommended).** Download the file for your OS from GitHub Releases and run it. A tray (menu bar) icon appears; its menu shows the PIN and lets you generate a new PIN, unpair phones and enable **Start at login**.
+**Standalone executable (recommended).** Download the file for your OS from GitHub Releases and run it. The **control panel** opens in your browser with the 6-digit PIN, paired phones and *Start when I sign in*, and a tray (menu bar) icon appears. Start at sign-in is turned on the first time, so the server comes back after a reboot.
+
+To see the PIN again later, click the tray icon (*Pair a phone / show PIN…*) or just start AndroidDeck Server again: a second launch opens the panel of the one already running.
 
 | OS | File | First run |
 |---|---|---|
@@ -49,7 +51,7 @@ The deck layout is **stored on each PC** (each PC has different apps installed).
 | macOS | `server/start-macos.command` |
 | Linux | `./server/start-linux.sh` (add `--tray` for tray mode) |
 
-The server window (or tray menu) shows the name, address, **6-digit PIN** and **certificate fingerprint**.
+The control panel (or the console window when run from source) shows the name, address, **6-digit PIN** and **certificate fingerprint**. In console mode the panel URL is printed in the log.
 
 ### 2. Install the app
 
@@ -63,11 +65,12 @@ adb install app/build/outputs/apk/release/app-release.apk
 
 Open the app on the same Wi-Fi and the PC shows up automatically → **Pair** → enter the PIN.
 Check that the **fingerprint in the PIN dialog matches the one on the PC**; if it does, no other device is intercepting the connection.
-After pairing, the app connects on its own every time. Add more PCs with **+** in the top bar (a `+ 1 new` badge appears when an unpaired PC is found).
+After pairing, the app connects on its own every time. Add more PCs from the PC name at the top left → *Add or manage PCs* (a dot on the name means an unpaired PC was found).
 
 ## Usage
 
-- **Edit mode**: tap the pencil → tap a button to edit it, `+` to add one, long-press and drag to reorder. Outside edit mode, long-press a button to edit it directly.
+- **Layout**: buttons are sized so the whole page fits and stays centered (tuned for small screens such as the Galaxy Z Fold cover display). Settings → *Button size* switches from *Auto* to Small/Medium/Large with scrolling; *Full screen* hides the status and navigation bars (swipe from an edge to show them).
+- **Edit mode**: ⋮ (top right) → *Edit deck* → tap a button to edit it, `+` to add one, long-press and drag to reorder, *Done* to finish. Outside edit mode, long-press a button to edit it directly.
 - **Folders**: choose *Folder* as the action type and save. In edit mode, tap the folder to open it and add buttons. Rename or recolor it with the pencil inside the folder.
 - **Multi-actions**: *Multi* → add steps and set each step's delay and action. If a step fails, the error names it ("step N: …").
 - **Targeting another PC**: with two or more PCs paired, the editor shows *Run on*. Buttons that target another PC show a small PC icon in the top-right corner.
@@ -85,7 +88,7 @@ After pairing, the app connects on its own every time. Add more PCs with **+** i
 | Per-app mixer | ✅ | ❌ (no public API) | ✅ PipeWire / PulseAudio |
 | Now playing | ✅ System media session (Python 3.11+) | Spotify and Music only (asks for Automation permission once) | ✅ MPRIS players |
 | Keyboard & mouse | ✅ | Needs *Accessibility* permission | X11 ✅ / **Wayland needs `ydotool` + `ydotoold`** |
-| Tray icon | ✅ | Menu bar | Desktops with AppIndicator support (GNOME needs an extension) |
+| Tray icon | ✅ Left click opens the control panel | Menu bar | AppIndicator / XEmbed trays (GNOME needs an extension). The standalone build may show the icon without a menu; left click opens the control panel |
 
 On Linux, if `python3 -m venv` fails run `sudo apt install python3-venv`; if building `evdev` fails run `sudo apt install python3-dev build-essential`.
 
@@ -93,10 +96,14 @@ On Linux, if `python3 -m venv` fails run `sudo apt install python3-venv`; if bui
 
 ```
 AndroidDeckServer [--tray | --console] [--port 47777] [--name NAME] [--new-pin] [--revoke-all]
-                  [--autostart on|off|status] [--no-discovery] [--host 0.0.0.0] [--paths] [-v]
+                  [--autostart on|off|status] [--login] [--no-discovery] [--host 0.0.0.0] [--paths] [-v]
 ```
 
-The executable starts in tray mode by default; running from source starts in console mode. Settings, certificate, deck and log (`config.json`, `tls.key/crt`, `profile.json`, `server.log`) live in:
+The executable starts in tray mode by default and opens the control panel; running from source starts in console mode. `--login` (used by the start-at-login entry) stays in the tray without opening a window.
+
+**Start at sign-in** is turned on the first time the tray app runs (Windows Run key, macOS LaunchAgent, Linux XDG autostart) and its path is refreshed on every start, so moving the executable keeps it working. Turn it off in the control panel or tray menu and it stays off. It starts with your desktop session, not at boot: the server needs a signed-in session for keyboard, mouse and audio, so enable automatic sign-in if the PC must be usable right after power-on. It is not turned on automatically when `ANDROIDDECK_HOME` is set.
+
+Settings, certificate, deck and log (`config.json`, `tls.key/crt`, `profile.json`, `server.log`, `panel.json`) live in:
 
 | OS | Path |
 |---|---|
@@ -110,7 +117,8 @@ Set the `ANDROIDDECK_HOME` environment variable to use a different folder (porta
 
 - All traffic is **TLS (HTTPS / WSS)**. On first run the server creates a self-signed certificate; the phone **pins** its SHA-256 fingerprint when pairing and refuses any other certificate afterwards.
 - The moment of first pairing is the only weak point (trust on first use). Comparing the fingerprint in the PIN dialog with the one on the PC removes that risk.
-- Five wrong PINs block that IP for 60 seconds. The PC stores only hashes of device tokens. Manage pairing with `--new-pin`, `--revoke-all` or the tray menu.
+- Five wrong PINs block that IP for 60 seconds. The PC stores only hashes of device tokens. Manage pairing in the control panel (new PIN, unpair one or all phones; an unpaired phone is disconnected at once) or with `--new-pin` / `--revoke-all`.
+- The control panel listens on `127.0.0.1` only, on a random port under a random secret path (stored in `panel.json`, readable only by your user), and rejects foreign `Host` and `Origin` headers. It is not reachable from the network.
 - A paired phone can launch apps, type, move the mouse and run shell commands. If you don't need shell commands, set `"allow_commands": false` in `config.json`.
 - Deleting the PC's certificate (`tls.key`) changes its fingerprint, so every phone has to pair again.
 
@@ -136,7 +144,7 @@ Every request except `/api/info` and `/api/pair` needs `Authorization: Bearer <t
 | [`ci.yml`](.github/workflows/ci.yml) | Push to `main`, PRs, manual | Builds and lints the Android app; runs ruff and the [smoke test](server/tests/smoke_test.py) on Ubuntu, Windows and macOS, then **builds the standalone executable and smoke-tests that executable too** |
 | [`release.yml`](.github/workflows/release.yml) | `v*` tag push, manual | Attaches a signed APK, per-OS server executables, a source zip and `SHA256SUMS.txt` to a **draft release**; a person publishes it |
 
-The smoke test starts the server in an isolated folder and checks TLS pinning, discovery, pairing, the app list and icons, the profile, multi-actions, the mixer and the WebSocket channel. It never sends actions that affect the PC.
+The smoke test starts the server in an isolated folder and checks TLS pinning, discovery, pairing, the app list and icons, the profile, multi-actions, the mixer, the WebSocket channel and the control panel (secret path, Host/Origin checks, new PIN, unpair closes the session). It never sends actions that affect the PC.
 
 ```bash
 cd server && python tests/smoke_test.py --min-apps 1 --min-icons 1
@@ -156,10 +164,11 @@ Back up the key file and passwords outside the repository. If they are lost, exi
 
 Verified in this repository (Linux, Ubuntu 24.04 GNOME Wayland / PipeWire):
 
-- Server smoke test, 25 checks passing (fresh venv, both from source and as the PyInstaller executable): TLS and wrong-fingerprint rejection, discovery, pairing, 67 apps / 66 icons, profile validation, multi-actions with failing-step reporting, mixer, stats
+- Server smoke test, 35 checks passing (fresh venv, both from source and as the PyInstaller executable): TLS and wrong-fingerprint rejection, discovery, pairing, 67 apps / 66 icons, profile validation, multi-actions with failing-step reporting, mixer, stats
 - Per-app mixer: listing, volume (0.42 round-trip) and mute on a real playback stream
 - Now playing: title (quotes and Korean), artist, local album art and play/pause command against a fake MPRIS player
 - Wake-on-LAN info (MAC, broadcast) extraction, tray mode startup, start-at-login on/off
+- Start at sign-in on by default on first tray run, opt-out respected, moved path refreshed; a second launch exits at once and opens the running panel (isolated config folder, browser call stubbed). Control panel rendered in Chrome (dark and light, desktop and narrow widths)
 - Android: screens rendered against two real servers (Robolectric): pairing with fingerprint shown, wrong-fingerprint rejection, switching between two PCs, cross-PC button run and acknowledged, multi-action, folder, audio (now playing, mic, mixer), Touch, System, Settings. Lint: 0 issues
 
 Not yet verified: **running on Windows and macOS** (PowerShell icon extraction, pycaw mixer and mic, system media session, sips, PyInstaller builds) — the Windows/macOS CI jobs are the first place this runs; **installation on a real phone** (widget, tiles and trackpad feel can only be checked on a device); real app launches, keystrokes and mouse movement (deliberately not sent during testing so the PC wasn't controlled); an actual Wake-on-LAN wake-up.
@@ -177,8 +186,9 @@ Not yet verified: **running on Windows and macOS** (PowerShell icon extraction, 
 | 7 | Pair a second PC | Top-bar switching, *Run on* button runs on the other PC, page copy works |
 | 8 | Put the PC to sleep → *Wake* | PC wakes up and the app reconnects (requires WoL in BIOS) |
 | 9 | Widget and tiles | Buttons run from the widget/tiles with the app closed |
-| 10 | Tray *Start at login* on, reboot | Server starts after login; phone reconnects automatically |
-| 11 | Export deck → import (add) | Pages are duplicated and appended |
+| 10 | Reboot the PC (start at sign-in is on by default) | Server starts after sign-in; phone reconnects automatically |
+| 11 | Click the tray icon, or start AndroidDeck Server again | Control panel opens with the current PIN; *New PIN* and *Unpair* work |
+| 12 | Export deck → import (add) | Pages are duplicated and appended |
 
 If something goes wrong, run the server with `-v` or check `server.log`.
 

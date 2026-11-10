@@ -39,6 +39,12 @@ import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -153,6 +159,10 @@ fun MainScreen(vm: DeckViewModel, onOpenDevices: () -> Unit) {
     }
 }
 
+/**
+ * Compact top bar: the current PC as one chip (tap to switch), and a single overflow menu
+ * for Edit / Settings / Devices, so the deck keeps the vertical space on short screens.
+ */
 @Composable
 private fun TopBar(
     vm: DeckViewModel,
@@ -167,69 +177,123 @@ private fun TopBar(
     val servers by vm.servers.collectAsStateWithLifecycle()
     val clients by vm.clients.collectAsStateWithLifecycle()
     val newServers by vm.newServers.collectAsStateWithLifecycle()
+    val state = current?.state?.collectAsStateWithLifecycle()?.value
+    var pcMenu by remember { mutableStateOf(false) }
+    var moreMenu by remember { mutableStateOf(false) }
 
-    Row(Modifier.fillMaxWidth().height(60.dp).padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        LazyRow(
-            Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            contentPadding = PaddingValues(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            items(servers, key = { it.id }) { s ->
-                val c = clients[s.id]
-                val st = c?.state?.collectAsStateWithLifecycle()?.value
-                val sel = current?.id == s.id
-                Row(
-                    Modifier
-                        .clip(CircleShape)
-                        .background(if (sel) p.surfaceHigh else p.bg)
-                        .clickable { vm.select(s.id) }
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
-                        .animateContentSize(),
-                    verticalAlignment = Alignment.CenterVertically,
+    Row(Modifier.fillMaxWidth().height(48.dp).padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f)) {
+            Row(
+                Modifier
+                    .clip(CircleShape)
+                    .background(p.surfaceHigh)
+                    .clickable { pcMenu = true }
+                    .padding(start = 14.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusDot(state)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    current?.server?.name ?: "No PC",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = p.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 220.dp),
+                )
+                Spacer(Modifier.width(2.dp))
+                Icon(Icons.Rounded.KeyboardArrowDown, "Switch PC", tint = p.textDim, modifier = Modifier.size(20.dp))
+                if (newServers.isNotEmpty()) {
+                    Box(Modifier.padding(start = 2.dp).size(8.dp).clip(CircleShape).background(p.accent))
+                }
+            }
+            DropdownMenu(
+                expanded = pcMenu,
+                onDismissRequest = { pcMenu = false },
+                containerColor = p.surfaceHigh,
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                servers.forEach { s ->
+                    val st = clients[s.id]?.state?.collectAsStateWithLifecycle()?.value
+                    DropdownMenuItem(
+                        text = { Text(s.name, style = MaterialTheme.typography.labelLarge, color = p.text, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { StatusDot(st) },
+                        trailingIcon = { if (s.id == current?.id) Icon(Icons.Rounded.Check, "Current", tint = p.textDim) },
+                        onClick = {
+                            vm.select(s.id)
+                            pcMenu = false
+                        },
+                    )
+                }
+                HorizontalDivider(color = p.outline)
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            if (newServers.isEmpty()) "Add or manage PCs" else "Add PC · ${newServers.size} new",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = p.text,
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Rounded.Add, null, tint = p.textDim) },
+                    onClick = {
+                        pcMenu = false
+                        onOpenDevices()
+                    },
+                )
+            }
+        }
+        if (editMode) {
+            Row(
+                Modifier
+                    .padding(end = 4.dp)
+                    .clip(CircleShape)
+                    .background(p.accent)
+                    .clickable(onClick = onToggleEdit)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Check, null, tint = p.onAccent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Done", style = MaterialTheme.typography.labelLarge, color = p.onAccent)
+            }
+        } else {
+            Box {
+                IconButton(onClick = { moreMenu = true }) { Icon(Icons.Rounded.MoreVert, "More", tint = p.text) }
+                DropdownMenu(
+                    expanded = moreMenu,
+                    onDismissRequest = { moreMenu = false },
+                    containerColor = p.surfaceHigh,
+                    shape = RoundedCornerShape(16.dp),
                 ) {
-                    StatusDot(st)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        s.name,
-                        style = if (sel) MaterialTheme.typography.titleSmall else MaterialTheme.typography.labelLarge,
-                        color = if (sel) p.text else p.textDim,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 180.dp),
+                    if (showEdit) {
+                        DropdownMenuItem(
+                            text = { Text("Edit deck", style = MaterialTheme.typography.labelLarge, color = p.text) },
+                            leadingIcon = { Icon(Icons.Rounded.Edit, null, tint = p.textDim) },
+                            onClick = {
+                                moreMenu = false
+                                onToggleEdit()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Settings", style = MaterialTheme.typography.labelLarge, color = p.text) },
+                        leadingIcon = { Icon(Icons.Rounded.Tune, null, tint = p.textDim) },
+                        onClick = {
+                            moreMenu = false
+                            onSettings()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Devices", style = MaterialTheme.typography.labelLarge, color = p.text) },
+                        leadingIcon = { Icon(Icons.Rounded.Devices, null, tint = p.textDim) },
+                        onClick = {
+                            moreMenu = false
+                            onOpenDevices()
+                        },
                     )
                 }
             }
-            item(key = "__devices") {
-                Row(
-                    Modifier.clip(CircleShape).clickable(onClick = onOpenDevices).padding(horizontal = 10.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Rounded.Add, "Devices", tint = p.textDim, modifier = Modifier.size(18.dp))
-                    if (newServers.isNotEmpty()) {
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "${newServers.size} new",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = p.onAccent,
-                            modifier = Modifier.clip(CircleShape).background(p.accent).padding(horizontal = 8.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-            }
         }
-        if (showEdit) {
-            IconButton(onClick = onToggleEdit) {
-                if (editMode) {
-                    Box(Modifier.size(34.dp).clip(CircleShape).background(p.accent), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Check, "Done editing", tint = p.onAccent, modifier = Modifier.size(20.dp))
-                    }
-                } else {
-                    Icon(Icons.Rounded.Edit, "Edit deck", tint = p.text)
-                }
-            }
-        }
-        IconButton(onClick = onSettings) { Icon(Icons.Rounded.Tune, "Settings", tint = p.text) }
     }
 }
 
@@ -285,7 +349,7 @@ private fun ConnectionBanner(vm: DeckViewModel, client: DeckClient, onOpenDevice
 @Composable
 private fun BottomNav(tab: Tab, onSelect: (Tab) -> Unit) {
     val p = LocalPalette.current
-    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
         Row(
             Modifier.clip(CircleShape).background(p.surface).padding(5.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -297,7 +361,7 @@ private fun BottomNav(tab: Tab, onSelect: (Tab) -> Unit) {
                         .clip(CircleShape)
                         .background(if (sel) p.accent else p.surface)
                         .clickable { onSelect(t) }
-                        .padding(horizontal = if (sel) 18.dp else 16.dp, vertical = 11.dp)
+                        .padding(horizontal = if (sel) 18.dp else 16.dp, vertical = 10.dp)
                         .animateContentSize(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

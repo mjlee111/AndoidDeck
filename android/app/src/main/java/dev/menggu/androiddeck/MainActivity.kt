@@ -1,5 +1,6 @@
 package dev.menggu.androiddeck
 
+import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -25,6 +26,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -43,11 +47,33 @@ class MainActivity : ComponentActivity() {
             val settings by vm.settings.collectAsStateWithLifecycle()
             DeckTheme(settings.theme) {
                 KeepScreenOn(settings.keepScreenOn)
+                FullScreen(settings.fullScreen)
                 LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.onForeground() }
                 LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.onBackground() }
                 AppRoot(vm)
             }
         }
+    }
+
+    // The system re-shows the bars after dialogs, the keyboard or app switches; hide them again.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && vm.settings.value.fullScreen) applyFullScreen(this, true)
+    }
+}
+
+private fun applyFullScreen(activity: Activity, on: Boolean) {
+    val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    if (on) controller.hide(WindowInsetsCompat.Type.systemBars()) else controller.show(WindowInsetsCompat.Type.systemBars())
+}
+
+@Composable
+private fun FullScreen(on: Boolean) {
+    val activity = LocalView.current.context as? Activity ?: return
+    DisposableEffect(on) {
+        applyFullScreen(activity, on)
+        onDispose { }
     }
 }
 
@@ -81,7 +107,7 @@ private fun AppRoot(vm: DeckViewModel) {
         }
         SnackbarHost(
             snackbar,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 76.dp),
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 68.dp),
         ) { data ->
             Snackbar(data, containerColor = p.surfaceHigher, contentColor = p.text)
         }

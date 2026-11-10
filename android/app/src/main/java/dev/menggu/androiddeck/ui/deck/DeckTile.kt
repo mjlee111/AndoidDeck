@@ -159,10 +159,10 @@ fun DeckTile(
     ) {
         val labelVisible = showLabel && button.label.isNotBlank()
         val glyph = maxWidth * if (labelVisible) 0.34f else 0.42f
-        val labelStyle = if (maxWidth < 84.dp) {
-            MaterialTheme.typography.labelSmall.copy(letterSpacing = MaterialTheme.typography.labelMedium.letterSpacing)
-        } else {
-            MaterialTheme.typography.labelMedium
+        val labelStyle = when {
+            maxWidth < 84.dp -> MaterialTheme.typography.labelSmall.copy(letterSpacing = MaterialTheme.typography.labelMedium.letterSpacing)
+            maxWidth > 140.dp -> MaterialTheme.typography.labelLarge
+            else -> MaterialTheme.typography.labelMedium
         }
         val isFolderPreview = button.action.type == "folder" && button.icon.kind == "none" && !button.children.isNullOrEmpty()
         Column(

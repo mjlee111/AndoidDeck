@@ -7,8 +7,12 @@ import kotlinx.serialization.builtins.ListSerializer
 
 @Serializable
 data class Settings(
+    /** Size the deck so the whole page fits on screen (centered); [tileSize] is used when false. */
+    val autoFit: Boolean = true,
     /** 0 = small, 1 = medium, 2 = large tiles. */
     val tileSize: Int = 1,
+    /** Hide the status and navigation bars (swipe from an edge to show them briefly). */
+    val fullScreen: Boolean = true,
     val showLabels: Boolean = true,
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = false,

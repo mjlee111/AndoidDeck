@@ -7,17 +7,20 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -43,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +65,7 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.window.Dialog
@@ -79,6 +84,8 @@ import dev.menggu.androiddeck.ui.components.SecondaryButton
 import dev.menggu.androiddeck.ui.components.osIcon
 import dev.menggu.androiddeck.ui.theme.LocalPalette
 import kotlinx.coroutines.launch
+import kotlin.math.abs
+import kotlin.math.ln
 
 /** Request to open the button editor. button == null means "new button at location". */
 data class EditorRequest(val location: Location, val button: DeckButton?)
@@ -155,7 +162,7 @@ fun DeckScreen(
                 onEdit = { onEdit(EditorRequest(Location(pageId, folder.id), it)) },
                 onReorder = { vm.reorder(Location(pageId, folder.id), it) },
                 onDragging = { dragging = it },
-                emptyHint = "This folder is empty.\nTap the pencil above, then + to add buttons.",
+                emptyHint = "This folder is empty.\nTap ⋮ → Edit deck, then + to add buttons.",
             )
             return@Column
         }
@@ -192,7 +199,7 @@ fun DeckScreen(
                 onLongEdit = { onEdit(EditorRequest(Location(page.id), it)) },
                 onReorder = { vm.reorder(Location(page.id), it) },
                 onDragging = { dragging = it },
-                emptyHint = "This page is empty.\nTap the pencil above to add buttons.",
+                emptyHint = "This page is empty.\nTap ⋮ → Edit deck to add buttons.",
             )
         }
     }
@@ -281,7 +288,7 @@ private fun PageTabs(
         return
     }
     LazyRow(
-        Modifier.fillMaxWidth().height(48.dp),
+        Modifier.fillMaxWidth().height(40.dp),
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -356,11 +363,12 @@ private fun DeckGrid(
     LaunchedEffect(buttons) {
         if (drag.draggingId == null) order = buttons
     }
-    val minTile = when (settings.tileSize) {
+    val fixedTile = when (settings.tileSize) {
         0 -> 76.dp
         2 -> 128.dp
         else -> 100.dp
     }
+    val cellCount = order.size + if (editMode) 1 else 0
 
     fun haptic() {
         if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -374,94 +382,126 @@ private fun DeckGrid(
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minTile),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier
-                .fillMaxSize()
-                .onGloballyPositioned { drag.gridCoords = it }
-                .pointerInput(editMode, key) {
-                    if (!editMode) return@pointerInput
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { local ->
-                            val coords = drag.gridCoords ?: return@detectDragGesturesAfterLongPress
-                            val root = coords.localToRoot(local)
-                            val hit = order.firstOrNull { b -> drag.slots[b.id]?.contains(root) == true }
-                                ?: return@detectDragGesturesAfterLongPress
-                            drag.draggingId = hit.id
-                            drag.finger = root
-                            drag.grab = root - (drag.slots[hit.id]?.topLeft ?: root)
-                            onDragging(true)
-                            if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                        },
-                        onDrag = { change, amount ->
-                            val id = drag.draggingId ?: return@detectDragGesturesAfterLongPress
-                            change.consume()
-                            drag.finger += amount
-                            val target = order.firstOrNull { b ->
-                                b.id != id && drag.slots[b.id]?.let { r ->
-                                    r.deflate(r.width * 0.18f).contains(drag.finger)
-                                } == true
-                            }
-                            if (target != null) {
-                                val from = order.indexOfFirst { it.id == id }
-                                val to = order.indexOfFirst { it.id == target.id }
-                                if (from >= 0 && to >= 0) {
-                                    order = order.toMutableList().apply { add(to, removeAt(from)) }
-                                    haptic()
-                                }
-                            }
-                        },
-                        onDragEnd = { endDrag() },
-                        onDragCancel = { endDrag() },
-                    )
+    // Long-press drag to reorder (edit mode); shared by both grid layouts.
+    val dragInput = Modifier
+        .onGloballyPositioned { drag.gridCoords = it }
+        .pointerInput(editMode, key) {
+            if (!editMode) return@pointerInput
+            detectDragGesturesAfterLongPress(
+                onDragStart = { local ->
+                    val coords = drag.gridCoords ?: return@detectDragGesturesAfterLongPress
+                    val root = coords.localToRoot(local)
+                    val hit = order.firstOrNull { b -> drag.slots[b.id]?.contains(root) == true }
+                        ?: return@detectDragGesturesAfterLongPress
+                    drag.draggingId = hit.id
+                    drag.finger = root
+                    drag.grab = root - (drag.slots[hit.id]?.topLeft ?: root)
+                    onDragging(true)
+                    if (settings.haptics) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 },
-        ) {
-            itemsIndexed(order, key = { _, b -> b.id }) { _, b ->
-                val isDragging = drag.draggingId == b.id
-                val target = vm.targetOf(b.action, client)
-                val otherPc = b.action.device?.takeIf { it != client.id }?.let { d -> servers.find { it.id == d } }
-                DeckTile(
-                    button = b,
-                    iconUrl = iconUrl,
-                    showLabel = settings.showLabels,
-                    editMode = editMode,
-                    flash = flashes[b.id],
-                    live = liveFor(b, target),
-                    deviceBadge = otherPc?.let { osIcon(it.os) },
-                    onClick = {
-                        if (editMode) onEdit(b) else {
+                onDrag = { change, amount ->
+                    val id = drag.draggingId ?: return@detectDragGesturesAfterLongPress
+                    change.consume()
+                    drag.finger += amount
+                    val target = order.firstOrNull { b ->
+                        b.id != id && drag.slots[b.id]?.let { r ->
+                            r.deflate(r.width * 0.18f).contains(drag.finger)
+                        } == true
+                    }
+                    if (target != null) {
+                        val from = order.indexOfFirst { it.id == id }
+                        val to = order.indexOfFirst { it.id == target.id }
+                        if (from >= 0 && to >= 0) {
+                            order = order.toMutableList().apply { add(to, removeAt(from)) }
                             haptic()
-                            onPress(b)
                         }
-                    },
-                    onLongClick = if (editMode) null else ({ onLongEdit(b) }),
-                    modifier = Modifier
-                        .then(if (isDragging) Modifier.zIndex(1f) else Modifier.animateItem())
-                        .onGloballyPositioned { c ->
-                            val r = Rect(c.positionInRoot(), c.size.toSize())
-                            if (drag.slots[b.id] != r) drag.slots[b.id] = r
+                    }
+                },
+                onDragEnd = { endDrag() },
+                onDragCancel = { endDrag() },
+            )
+        }
+
+    @Composable
+    fun Tile(b: DeckButton, modifier: Modifier) {
+        val isDragging = drag.draggingId == b.id
+        val target = vm.targetOf(b.action, client)
+        val otherPc = b.action.device?.takeIf { it != client.id }?.let { d -> servers.find { it.id == d } }
+        DeckTile(
+            button = b,
+            iconUrl = iconUrl,
+            showLabel = settings.showLabels,
+            editMode = editMode,
+            flash = flashes[b.id],
+            live = liveFor(b, target),
+            deviceBadge = otherPc?.let { osIcon(it.os) },
+            onClick = {
+                if (editMode) onEdit(b) else {
+                    haptic()
+                    onPress(b)
+                }
+            },
+            onLongClick = if (editMode) null else ({ onLongEdit(b) }),
+            modifier = modifier
+                .then(if (isDragging) Modifier.zIndex(1f) else Modifier)
+                .onGloballyPositioned { c ->
+                    val r = Rect(c.positionInRoot(), c.size.toSize())
+                    if (drag.slots[b.id] != r) drag.slots[b.id] = r
+                }
+                .graphicsLayer {
+                    if (isDragging) {
+                        val slot = drag.slots[b.id]
+                        if (slot != null) {
+                            translationX = drag.finger.x - drag.grab.x - slot.left
+                            translationY = drag.finger.y - drag.grab.y - slot.top
                         }
-                        .graphicsLayer {
-                            if (isDragging) {
-                                val slot = drag.slots[b.id]
-                                if (slot != null) {
-                                    translationX = drag.finger.x - drag.grab.x - slot.left
-                                    translationY = drag.finger.y - drag.grab.y - slot.top
-                                }
-                                scaleX = 1.08f
-                                scaleY = 1.08f
-                                alpha = 0.92f
+                        scaleX = 1.08f
+                        scaleY = 1.08f
+                        alpha = 0.92f
+                    }
+                },
+        )
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = GRID_EDGE, vertical = GRID_EDGE / 2)) {
+        val fit = remember(maxWidth, maxHeight, cellCount, settings.autoFit, fixedTile) {
+            fitGrid(maxWidth, maxHeight, cellCount, settings.autoFit, fixedTile)
+        }
+        if (fit.fits) {
+            // Whole page on screen: rows are laid out individually so a partial last row is centered too.
+            val cells: List<DeckButton?> = order + if (editMode) listOf(null) else emptyList()
+            Column(
+                Modifier.align(Alignment.Center).then(dragInput),
+                verticalArrangement = Arrangement.spacedBy(GRID_GAP),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                cells.chunked(fit.columns).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(GRID_GAP)) {
+                        row.forEach { b ->
+                            if (b == null) {
+                                AddTile(onClick = { onEdit(null) }, modifier = Modifier.size(fit.tile))
+                            } else {
+                                key(b.id) { Tile(b, Modifier.size(fit.tile)) }
                             }
-                        },
-                )
+                        }
+                    }
+                }
             }
-            if (editMode) {
-                item(key = "__add") {
-                    AddTile(onClick = { onEdit(null) }, modifier = Modifier.animateItem())
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(fit.columns),
+                contentPadding = PaddingValues(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(GRID_GAP),
+                verticalArrangement = Arrangement.spacedBy(GRID_GAP),
+                modifier = Modifier.align(Alignment.TopCenter).width(fit.width).fillMaxHeight().then(dragInput),
+            ) {
+                itemsIndexed(order, key = { _, b -> b.id }) { _, b ->
+                    Tile(b, if (drag.draggingId == b.id) Modifier else Modifier.animateItem())
+                }
+                if (editMode) {
+                    item(key = "__add") {
+                        AddTile(onClick = { onEdit(null) }, modifier = Modifier.animateItem())
+                    }
                 }
             }
         }
@@ -536,4 +576,48 @@ private fun PageDialog(
             }
         }
     }
+}
+
+private val GRID_GAP = 12.dp
+private val GRID_EDGE = 12.dp
+private val FIT_MIN_TILE = 72.dp
+private val FIT_MAX_TILE = 168.dp
+private const val FIT_MAX_COLUMNS = 8
+
+/** Grid geometry: [fits] means every cell is visible without scrolling. */
+private data class GridFit(val columns: Int, val tile: Dp, val width: Dp, val height: Dp, val fits: Boolean)
+
+/**
+ * Auto-fit picks the column count that gives the largest square tiles while the whole page stays
+ * on screen (stream-deck style); the grid is then centered. When even [FIT_MIN_TILE] tiles do not
+ * fit, or a fixed size is chosen, it falls back to a scrolling grid of the largest tiles that fill
+ * the width.
+ */
+private fun fitGrid(width: Dp, height: Dp, cells: Int, autoFit: Boolean, fixedTile: Dp): GridFit {
+    val n = cells.coerceAtLeast(1)
+    fun rowsFor(c: Int) = (n + c - 1) / c
+    fun span(count: Int, tile: Dp) = tile * count + GRID_GAP * (count - 1)
+    if (autoFit) {
+        val areaAspect = width / height
+        // Lower is better: mismatch between the block's and the screen's proportions.
+        fun shapeCost(f: GridFit) = abs(ln((f.width / f.height) / areaAspect))
+        var best: GridFit? = null
+        for (c in 1..minOf(n, FIT_MAX_COLUMNS)) {
+            val r = rowsFor(c)
+            val tile = minOf((width - GRID_GAP * (c - 1)) / c, (height - GRID_GAP * (r - 1)) / r, FIT_MAX_TILE)
+            if (tile < FIT_MIN_TILE) continue
+            val cand = GridFit(c, tile, span(c, tile), span(r, tile), fits = true)
+            val cur = best
+            // Biggest tiles win; when tiles are capped or nearly equal, prefer the screen-shaped block.
+            if (cur == null || tile > cur.tile + 0.5.dp || (tile > cur.tile - 0.5.dp && shapeCost(cand) < shapeCost(cur))) {
+                best = cand
+            }
+        }
+        best?.let { return it }
+    }
+    val minTile = if (autoFit) FIT_MIN_TILE else fixedTile
+    val c = ((width + GRID_GAP) / (minTile + GRID_GAP)).toInt().coerceIn(1, FIT_MAX_COLUMNS)
+    val tile = (width - GRID_GAP * (c - 1)) / c
+    val h = span(rowsFor(c), tile)
+    return GridFit(c, tile, span(c, tile), h, fits = h <= height)
 }
