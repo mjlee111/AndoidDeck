@@ -46,6 +46,9 @@ public static class DeckIcons
 
     // Shell image of an AppsFolder item (works for desktop and Store apps).
     // Returns null on success, otherwise a short reason for the log.
+    // Memory faults inside shell/GDI calls are caught here so one bad icon cannot end the whole scan.
+    [System.Runtime.ExceptionServices.HandleProcessCorruptedStateExceptions]
+    [System.Security.SecurityCritical]
     public static string SaveShellIcon(string parsingName, string outPath, int size)
     {
         IShellItemImageFactory factory = null;
@@ -120,38 +123,51 @@ public static class DeckIcons
         }
     }
 
-    // Image.FromHbitmap drops the alpha channel; re-wrap the 32bpp pixels as ARGB.
+    // Image.FromHbitmap drops the alpha channel; copy the 32bpp pixels row by row into an ARGB bitmap.
+    // Rows are addressed through Stride, which is negative for bottom-up DIBs (copying the buffer as
+    // one block from Scan0 would read past its end).
     private static Bitmap ToArgb(IntPtr hbm)
     {
         using (Bitmap src = Image.FromHbitmap(hbm))
         {
             if (Image.GetPixelFormatSize(src.PixelFormat) < 32) return new Bitmap(src);
-            Rectangle rect = new Rectangle(0, 0, src.Width, src.Height);
-            BitmapData data = src.LockBits(rect, ImageLockMode.ReadOnly, src.PixelFormat);
+            int w = src.Width, h = src.Height;
+            Rectangle rect = new Rectangle(0, 0, w, h);
+            Bitmap dst = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            bool hasAlpha = false;
+            BitmapData s = src.LockBits(rect, ImageLockMode.ReadOnly, src.PixelFormat);
             try
             {
-                byte[] bytes = new byte[Math.Abs(data.Stride) * data.Height];
-                Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
-                bool hasAlpha = false;
-                for (int i = 3; i < bytes.Length; i += 4)
+                BitmapData d = dst.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
                 {
-                    if (bytes[i] != 0) { hasAlpha = true; break; }
-                }
-                if (!hasAlpha) return new Bitmap(src);
-                using (Bitmap view = new Bitmap(data.Width, data.Height, data.Stride, PixelFormat.Format32bppArgb, data.Scan0))
-                {
-                    Bitmap copy = new Bitmap(data.Width, data.Height, PixelFormat.Format32bppArgb);
-                    using (Graphics g = Graphics.FromImage(copy))
+                    byte[] row = new byte[w * 4];
+                    for (int y = 0; y < h; y++)
                     {
-                        g.DrawImage(view, rect);
+                        Marshal.Copy(IntPtr.Add(s.Scan0, y * s.Stride), row, 0, row.Length);
+                        if (!hasAlpha)
+                        {
+                            for (int x = 3; x < row.Length; x += 4)
+                            {
+                                if (row[x] != 0) { hasAlpha = true; break; }
+                            }
+                        }
+                        Marshal.Copy(row, 0, IntPtr.Add(d.Scan0, y * d.Stride), row.Length);
                     }
-                    return copy;
+                }
+                finally
+                {
+                    dst.UnlockBits(d);
                 }
             }
             finally
             {
-                src.UnlockBits(data);
+                src.UnlockBits(s);
             }
+            if (hasAlpha) return dst;
+            // Icon without an alpha channel: keep it opaque.
+            dst.Dispose();
+            return new Bitmap(src);
         }
     }
 }
