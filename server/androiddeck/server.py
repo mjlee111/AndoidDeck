@@ -287,7 +287,6 @@ class DeckServer:
         ws = web.WebSocketResponse(heartbeat=15, max_msg_size=1 << 20)
         await ws.prepare(request)
         client = Client(ws, request["device"].get("name", "?"))
-        self.clients[ws] = client
         log.info("Connected: %s (%s)", client.device, request.remote)
         try:
             volume = await self.audio.get()
@@ -301,6 +300,8 @@ class DeckServer:
                 "media": self._last.get("media"),
                 "wol": wol_info(self._local_ip(request)),
             })
+            # Register only after the welcome, so pushes (volume, media, ...) never arrive before it.
+            self.clients[ws] = client
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
                     try:

@@ -148,9 +148,9 @@ async def run_checks(base: str, home: Path, args: argparse.Namespace, check: Che
             check(r.status == 400, "invalid profile is rejected", r.status)
 
         async with s.ws_connect(base + "/ws", headers=headers) as ws:
-            welcome = await asyncio.wait_for(ws.receive_json(), 10)
-            check(welcome.get("t") == "welcome" and "mic" in welcome and "wol" in welcome,
-                  "WebSocket welcome", welcome.get("features"))
+            first = await asyncio.wait_for(ws.receive_json(), 10)
+            check(first.get("t") == "welcome" and "mic" in first and "wol" in first,
+                  "WebSocket welcome is the first message", first.get("features") or first.get("t"))
             await ws.send_json({"t": "sub", "stats": True, "mixer": True})
             # Zero-length pointer input exercises the trackpad path without moving anything.
             await ws.send_json({"t": "mouse", "dx": 0, "dy": 0})
