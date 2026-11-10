@@ -87,4 +87,5 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.coil.svg)
     implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.work.runtime.ktx)
 }
