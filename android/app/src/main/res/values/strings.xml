@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AndroidDeck</string>
+    <string name="widget_label">Deck buttons</string>
+    <string name="widget_description">Buttons you pinned in AndroidDeck</string>
+    <string name="tile_1">Deck 1</string>
+    <string name="tile_2">Deck 2</string>
+    <string name="tile_3">Deck 3</string>
+</resources>

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "androiddeck-server"
+version = "0.1.0"
+description = "PC companion server for the AndroidDeck Android app"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9",
+    "psutil>=5.9",
+    "pynput>=1.7",
+    "Pillow>=10.0",
+    "cryptography>=42",
+    "pystray>=0.19",
+    "pycaw>=20230407; sys_platform == 'win32'",
+    "comtypes>=1.2; sys_platform == 'win32'",
+    "winrt-runtime>=2.0; sys_platform == 'win32' and python_version >= '3.11'",
+    "winrt-Windows.Foundation>=2.0; sys_platform == 'win32' and python_version >= '3.11'",
+    "winrt-Windows.Media.Control>=2.0; sys_platform == 'win32' and python_version >= '3.11'",
+    "winrt-Windows.Storage.Streams>=2.0; sys_platform == 'win32' and python_version >= '3.11'",
+]
+
+[project.scripts]
+androiddeck-server = "androiddeck.__main__:main"
+
+[tool.setuptools]
+packages = ["androiddeck", "androiddeck.apps"]
+
+[tool.setuptools.package-data]
+"androiddeck.apps" = ["*.ps1"]

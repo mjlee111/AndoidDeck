@@ -1,0 +1,135 @@
+# Builds and lints the Android app, and smoke-tests the PC server on all three desktop OSes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android · build + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Also validates the Gradle wrapper checksum.
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and lint
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug :app:assembleRelease :app:lintDebug --stacktrace
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: androiddeck-apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-report
+          path: android/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+  server:
+    name: Server · ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.13"]
+        include:
+          # Oldest supported version.
+          - os: ubuntu-latest
+            python: "3.10"
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt ruff
+
+      - name: Lint
+        run: ruff check androiddeck tests packaging run_server.py --target-version py310
+
+      # Windows and macOS runners have real Start-menu / Applications entries, so the app index
+      # and icon extraction (PowerShell / sips) are asserted there. Linux runners have almost none.
+      - name: Smoke test
+        shell: bash
+        env:
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          if [ "$RUNNER_OS_NAME" = "Linux" ]; then
+            python tests/smoke_test.py
+          else
+            python tests/smoke_test.py --min-apps 3 --min-icons 3
+          fi
+
+      # Packaging is where platform-specific imports break, so the frozen build is tested too.
+      - name: Build standalone executable
+        if: matrix.python == '3.13'
+        run: |
+          python -m pip install pyinstaller
+          python packaging/build.py
+
+      - name: Smoke test the executable
+        if: matrix.python == '3.13'
+        shell: bash
+        env:
+          RUNNER_OS_NAME: ${{ runner.os }}
+        run: |
+          case "$RUNNER_OS_NAME" in
+            Windows) exe="dist/AndroidDeckServer.exe"; extra="--min-apps 3 --min-icons 3" ;;
+            macOS) exe="dist/AndroidDeck Server.app/Contents/MacOS/AndroidDeck Server"; extra="--min-apps 3 --min-icons 3" ;;
+            *) exe="dist/AndroidDeckServer"; extra="" ;;
+          esac
+          python tests/smoke_test.py --exe "$exe" $extra
+
+      - name: Upload executable
+        if: matrix.python == '3.13'
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-${{ runner.os }}
+          path: |
+            server/dist/AndroidDeckServer*
+            server/dist/AndroidDeck-Server-macos.zip
+          if-no-files-found: error
+          retention-days: 14

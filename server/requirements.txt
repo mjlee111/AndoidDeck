@@ -1,0 +1,13 @@
+aiohttp>=3.9
+psutil>=5.9
+pynput>=1.7
+Pillow>=10.0
+cryptography>=42
+pystray>=0.19
+pycaw>=20230407; sys_platform == "win32"
+comtypes>=1.2; sys_platform == "win32"
+# Now playing on Windows (optional; skipped on Python 3.10).
+winrt-runtime>=2.0; sys_platform == "win32" and python_version >= "3.11"
+winrt-Windows.Foundation>=2.0; sys_platform == "win32" and python_version >= "3.11"
+winrt-Windows.Media.Control>=2.0; sys_platform == "win32" and python_version >= "3.11"
+winrt-Windows.Storage.Streams>=2.0; sys_platform == "win32" and python_version >= "3.11"
