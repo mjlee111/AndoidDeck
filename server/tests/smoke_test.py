@@ -194,6 +194,12 @@ async def run_checks(base: str, home: Path, args: argparse.Namespace, check: Che
 
 
 def main() -> int:
+    # CI consoles (Windows: cp1252) cannot print every character in server logs.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-apps", type=int, default=0)
     ap.add_argument("--min-icons", type=int, default=0)

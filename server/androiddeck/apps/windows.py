@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from . import Provider
@@ -30,6 +31,7 @@ class WindowsProvider(Provider):
         work = icon_dir.parent / "win_scan"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-File", str(script), "-OutDir", str(work)],
@@ -39,9 +41,16 @@ class WindowsProvider(Provider):
         index = work / "apps.json"
         if r.returncode != 0 or not index.exists():
             raise RuntimeError(r.stderr.strip()[:500] or f"exit code {r.returncode}")
-        items = json.loads(index.read_text(encoding="utf-8-sig"))
-        if isinstance(items, dict):
+        data = json.loads(index.read_text(encoding="utf-8-sig"))
+        items = (data.get("apps") or []) if isinstance(data, dict) else data
+        if isinstance(items, dict):  # ConvertTo-Json collapses one-element arrays
             items = [items]
+        if isinstance(data, dict):
+            shell_n, file_n = data.get("shellIcons", 0), data.get("fileIcons", 0)
+            log.info("Windows app scan: %d apps, %d icons (%d shell, %d from files) in %.1fs",
+                     len(items), shell_n + file_n, shell_n, file_n, time.monotonic() - started)
+            if data.get("errors"):
+                log.warning("Some app icons could not be read: %s", " | ".join(map(str, data["errors"])))
         out: list[tuple[str, str, Path | None, str | None]] = []
         for it in items:
             name = (it.get("name") or "").strip()

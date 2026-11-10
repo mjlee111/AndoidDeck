@@ -82,7 +82,8 @@ def _setup_logging(verbose: bool, to_file: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Windowed builds (PyInstaller --windowed, pythonw) have no console streams.
+    # Windowed builds (PyInstaller --windowed, pythonw) have no console streams; their log goes to a file.
+    no_console = sys.stdout is None or sys.stderr is None
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w")  # noqa: SIM115
     if sys.stderr is None:
@@ -108,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     tray = (args.tray or frozen) and not args.console
 
-    _setup_logging(args.verbose, to_file=tray)
+    _setup_logging(args.verbose, to_file=tray or no_console)
 
     if args.paths:
         print(f"config: {config_dir()}\ncache:  {cache_dir()}")
