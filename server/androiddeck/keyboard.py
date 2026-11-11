@@ -72,6 +72,10 @@ class KeyBackend:
     def type_text(self, text: str) -> None:
         raise NotImplementedError
 
+    def hold(self, keys: list[str], down: bool) -> None:
+        """Presses (down) or releases a whole combo, for push-to-talk style buttons."""
+        raise NotImplementedError
+
 
 class PynputBackend(KeyBackend):
     name = "pynput"
@@ -122,6 +126,13 @@ class PynputBackend(KeyBackend):
 
     def type_text(self, text: str) -> None:
         self._ctl.type(text)
+
+    def hold(self, keys: list[str], down: bool) -> None:
+        mods, rest = normalize_combo(keys)
+        resolved = [self._resolve(k) for k in [*mods, *rest]]
+        for k in (resolved if down else reversed(resolved)):
+            (self._ctl.press if down else self._ctl.release)(k)
+            time.sleep(0.008)
 
 
 # Linux input-event-codes.h key codes used by ydotool.
@@ -183,6 +194,17 @@ class YdotoolBackend(KeyBackend):
 
     def type_text(self, text: str) -> None:
         self._run(["type", "--", text])
+
+    def hold(self, keys: list[str], down: bool) -> None:
+        mods, rest = normalize_combo(keys)
+        codes: list[int] = []
+        for k in [*mods, *rest]:
+            code = _EVDEV.get(_SHIFTED.get(k, k))
+            if code is None:
+                raise KeyError_(f"key not supported by ydotool: {k}")
+            codes.append(code)
+        seq = [f"{c}:1" for c in codes] if down else [f"{c}:0" for c in reversed(codes)]
+        self._run(["key", *seq])
 
 
 def make_backend(preference: str = "auto") -> KeyBackend | None:

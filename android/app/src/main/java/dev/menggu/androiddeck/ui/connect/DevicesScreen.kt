@@ -370,7 +370,7 @@ private fun PairDialog(target: PairTarget, vm: DeckViewModel, onDismiss: () -> U
             Text("Pair with ${target.name}", style = MaterialTheme.typography.titleLarge, color = p.text, textAlign = TextAlign.Center)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Enter the 6-digit PIN shown in the AndroidDeck server window.",
+                "Enter the 6-digit PIN from the PC: click the AndroidDeck tray icon, or start AndroidDeck Server again, to open its control panel.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = p.textDim,
                 textAlign = TextAlign.Center,
@@ -382,7 +382,7 @@ private fun PairDialog(target: PairTarget, vm: DeckViewModel, onDismiss: () -> U
             ) {
                 Text("FINGERPRINT", style = MaterialTheme.typography.labelSmall, color = p.textDim)
                 Text(shortFingerprint(target.fp), style = MaterialTheme.typography.titleSmall.merge(MonoStyle), color = p.text)
-                Text("Must match the PC's server window", style = MaterialTheme.typography.labelSmall, color = p.textFaint)
+                Text("Must match the fingerprint in the PC's control panel", style = MaterialTheme.typography.labelSmall, color = p.textFaint)
             }
             Spacer(Modifier.height(16.dp))
             BasicTextField(
@@ -441,7 +441,7 @@ private fun ManualAddDialog(vm: DeckViewModel, onDismiss: () -> Unit, onFound: (
         Column(Modifier.clip(RoundedCornerShape(28.dp)).background(p.surface).padding(24.dp)) {
             Text("Add by IP address", style = MaterialTheme.typography.titleLarge, color = p.text)
             Spacer(Modifier.height(6.dp))
-            Text("Shown as “Address” in the server window.", style = MaterialTheme.typography.bodySmall, color = p.textDim)
+            Text("Shown as “Address” in the PC's control panel.", style = MaterialTheme.typography.bodySmall, color = p.textDim)
             Spacer(Modifier.height(16.dp))
             DeckTextField(host, { host = it.trim() }, "192.168.0.10",
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false))

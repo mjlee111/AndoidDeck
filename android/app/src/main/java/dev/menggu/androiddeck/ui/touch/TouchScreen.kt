@@ -5,7 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -241,13 +241,35 @@ private fun MouseButton(label: String, sub: String?, modifier: Modifier, onDown:
             .clip(RoundedCornerShape(18.dp))
             .background(if (pressed) p.surfaceHigher else p.surface)
             .pointerInput(Unit) {
-                detectTapGestures(onPress = {
+                // The button goes down only on a tap, or after a short hold (to drag on the PC). A swipe
+                // across it (e.g. to leave this screen) sends nothing.
+                awaitEachGesture {
+                    val down = awaitFirstDown()
                     pressed = true
-                    onDown()
-                    tryAwaitRelease()
-                    onUp()
+                    // true = lifted (tap), false = moved past the slop (swipe), null = still held.
+                    val lifted: Boolean? = withTimeoutOrNull(HOLD_MS) {
+                        var result: Boolean? = null
+                        while (result == null) {
+                            val c = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+                            result = when {
+                                c == null || !c.pressed -> true
+                                (c.position - down.position).getDistance() > viewConfiguration.touchSlop -> false
+                                else -> null
+                            }
+                        }
+                        result
+                    }
+                    when (lifted) {
+                        true -> { onDown(); onUp() }
+                        false -> Unit
+                        null -> {
+                            onDown()
+                            waitForUpOrCancellation()
+                            onUp()
+                        }
+                    }
                     pressed = false
-                })
+                }
             },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -295,3 +317,6 @@ private fun LiveKeyboard(client: DeckClient) {
         modifier = Modifier.size(1.dp).alpha(0f).focusRequester(focus),
     )
 }
+
+/** Hold this long on Left/Right to press and keep the button down (drag on the PC). */
+private const val HOLD_MS = 180L

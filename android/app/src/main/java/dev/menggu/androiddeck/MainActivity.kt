@@ -1,6 +1,11 @@
 package dev.menggu.androiddeck
 
+import dev.menggu.androiddeck.ui.theme.accentOn
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarDuration
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -42,12 +47,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Before the first frame, so the deck does not start in portrait and then rotate.
+        requestedOrientation = orientationFor(vm.settings.value.orientation)
         enableEdgeToEdge()
         setContent {
             val settings by vm.settings.collectAsStateWithLifecycle()
-            DeckTheme(settings.theme) {
+            DeckTheme(settings.theme, settings.accent) {
                 KeepScreenOn(settings.keepScreenOn)
                 FullScreen(settings.fullScreen)
+                Orientation(settings.orientation)
                 LifecycleEventEffect(Lifecycle.Event.ON_START) { vm.onForeground() }
                 LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.onBackground() }
                 AppRoot(vm)
@@ -66,6 +74,23 @@ private fun applyFullScreen(activity: Activity, on: Boolean) {
     val controller = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
     controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     if (on) controller.hide(WindowInsetsCompat.Type.systemBars()) else controller.show(WindowInsetsCompat.Type.systemBars())
+}
+
+/** "User" variants follow the system rotation lock when choosing between the two sides. */
+private fun orientationFor(setting: Int): Int = when (setting) {
+    1 -> ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+    2 -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    else -> ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+}
+
+@Composable
+private fun Orientation(setting: Int) {
+    val activity = LocalView.current.context as? Activity ?: return
+    DisposableEffect(setting) {
+        val wanted = orientationFor(setting)
+        if (activity.requestedOrientation != wanted) activity.requestedOrientation = wanted
+        onDispose { }
+    }
 }
 
 @Composable
@@ -93,23 +118,28 @@ private fun AppRoot(vm: DeckViewModel) {
     var showDevices by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
-        vm.messages.collect {
-            snackbar.currentSnackbarData?.dismiss()
-            snackbar.showSnackbar(it)
+        // A new message replaces the one showing.
+        vm.messages.collectLatest { m ->
+            val result = snackbar.showSnackbar(
+                m.text,
+                actionLabel = m.action,
+                duration = if (m.action != null) SnackbarDuration.Long else SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) m.onAction?.invoke()
         }
     }
     Box(Modifier.fillMaxSize().background(p.bg)) {
         if (servers.isEmpty()) {
             DevicesScreen(vm, onboarding = true, onClose = {})
         } else {
-            MainScreen(vm, onOpenDevices = { showDevices = true })
+            MainScreen(vm, onOpenDevices = { showDevices = true }, covered = showDevices)
             if (showDevices) DevicesScreen(vm, onboarding = false, onClose = { showDevices = false })
         }
         SnackbarHost(
             snackbar,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 68.dp),
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 16.dp),
         ) { data ->
-            Snackbar(data, containerColor = p.surfaceHigher, contentColor = p.text)
+            Snackbar(data, containerColor = p.surfaceHigher, contentColor = p.text, actionColor = p.accentOn(p.surfaceHigher))
         }
     }
 }

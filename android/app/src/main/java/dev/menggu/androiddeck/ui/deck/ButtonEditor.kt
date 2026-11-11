@@ -1,5 +1,9 @@
 package dev.menggu.androiddeck.ui.deck
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
+import dev.menggu.androiddeck.data.ButtonToggle
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -78,6 +82,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import dev.menggu.androiddeck.DeckViewModel
 import dev.menggu.androiddeck.Location
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import dev.menggu.androiddeck.data.MAX_SPAN
+import dev.menggu.androiddeck.data.TileWidget
 import dev.menggu.androiddeck.data.ButtonIcon
 import dev.menggu.androiddeck.data.DeckAction
 import dev.menggu.androiddeck.data.DeckButton
@@ -93,7 +103,8 @@ import dev.menggu.androiddeck.ui.components.SecondaryButton
 import dev.menggu.androiddeck.ui.components.SectionLabel
 import dev.menggu.androiddeck.ui.components.Segmented
 import dev.menggu.androiddeck.ui.components.osIcon
-import dev.menggu.androiddeck.ui.components.parseHexColor
+import dev.menggu.androiddeck.ui.components.ACCENT_COLOR
+import dev.menggu.androiddeck.ui.components.buttonColor
 import dev.menggu.androiddeck.ui.theme.LocalPalette
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -119,7 +130,7 @@ private val ACTION_TYPES = listOf(
 private val STEP_TYPES = ACTION_TYPES.filter { it.type !in setOf("multi", "folder", "wake") }
 
 val SWATCHES = listOf(
-    null, "#C6F36B", "#5BE49B", "#2ED8C3", "#54A0FF", "#7C83FD", "#B794FF",
+    null, ACCENT_COLOR, "#5BE49B", "#2ED8C3", "#54A0FF", "#7C83FD", "#B794FF",
     "#FF7EB6", "#FF6B6B", "#FF9F43", "#FECA57", "#E5E7EB", "#2B2F39",
 )
 
@@ -176,33 +187,62 @@ fun ButtonEditor(
     onSave: (DeckButton, Location, Boolean) -> Unit,
     onDelete: (DeckButton) -> Unit,
     onClose: () -> Unit,
+    onDuplicate: (DeckButton) -> Unit = {},
 ) {
     val p = LocalPalette.current
     val servers by vm.servers.collectAsStateWithLifecycle()
     val isNew = request.button == null
-    val inFolder = request.location.folderId != null
     val pcName: (String?) -> String? = { id -> servers.find { it.id == (id ?: owner.id) }?.name }
     var draft by remember { mutableStateOf(request.button ?: DeckButton(action = DeckAction(type = "app"))) }
     val target = vm.client(draft.action.device) ?: owner
     val os = target.server.os
     // Labels follow the action automatically until the user types their own.
-    var labelTouched by remember { mutableStateOf(!isNew && draft.label != autoLabel(draft.action, os, pcName)) }
+    var labelTouched by remember {
+        mutableStateOf(!isNew && draft.label != (draft.widget?.let { widgetLabel(it.type, it.name) } ?: autoLabel(draft.action, os, pcName)))
+    }
+    val isWidget = draft.widget != null
+    // Switching an existing folder to a widget would drop its buttons, so that switch is not offered.
+    val canSwitchKind = !(request.button?.action?.type == "folder" && !request.button.children.isNullOrEmpty())
     var targetPage by remember { mutableStateOf(request.location.pageId) }
+    // Where the item is saved: a page, or a folder on that page (moving it there).
+    var targetFolder by remember { mutableStateOf(request.location.folderId) }
+    val inFolder = targetFolder != null
     var picker by remember { mutableStateOf<String?>(null) } // "action" | "icon" | "step:N"
     var confirmDelete by remember { mutableStateOf(false) }
     var pinned by remember { mutableStateOf(request.button?.let { vm.isShortcut(it.id) } ?: false) }
 
     fun setAction(a: DeckAction, presetName: String? = null) {
         val children = if (a.type == "folder") draft.children ?: emptyList() else null
+        val plain = a.type in setOf("folder", "wake") || a.hold == true
         draft = draft.copy(
             action = a,
             children = children,
+            toggle = if (plain) null else draft.toggle,
+            longAction = if (plain) null else draft.longAction,
             label = if (labelTouched) draft.label else (presetName ?: autoLabel(a, (vm.client(a.device) ?: owner).server.os, pcName)),
         )
     }
 
-    val error = validationError(draft.action)
-    val location = if (inFolder) request.location else Location(targetPage)
+    fun setWidget(kind: WidgetKind, target: String? = null, name: String? = null) {
+        val resize = draft.widget == null && draft.cols == 1 && draft.rows == 1
+        draft = draft.copy(
+            widget = TileWidget(kind.type, target, name),
+            action = DeckAction(type = "none", device = draft.action.device),
+            children = null,
+            toggle = null,
+            longAction = null,
+            cols = if (resize) kind.cols else draft.cols,
+            rows = if (resize) kind.rows else draft.rows,
+            label = if (labelTouched) draft.label else widgetLabel(kind.type, name),
+        )
+    }
+
+    val error = draft.widget?.let { w ->
+        if (w.type == "mixer" && w.target == null && w.name.isNullOrBlank()) "Choose an app" else null
+    } ?: if (isWidget) null else validationError(draft.action)
+        ?: draft.toggle?.let { t -> validationError(t.action, nested = true)?.let { "Second action: $it" } }
+        ?: draft.longAction?.let { la -> validationError(la, nested = true)?.let { "Long press: $it" } }
+    val location = Location(targetPage, if (draft.action.type == "folder") null else targetFolder)
 
     BackHandler(enabled = picker == null, onBack = onClose)
 
@@ -214,35 +254,86 @@ fun ButtonEditor(
             ) {
                 IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "Close", tint = p.text) }
                 Text(
-                    if (isNew) "New button" else "Edit button",
+                    when {
+                        isWidget -> if (isNew) "New widget" else "Edit widget"
+                        else -> if (isNew) "New button" else "Edit button"
+                    },
                     style = MaterialTheme.typography.titleLarge,
                     color = p.text,
                     modifier = Modifier.weight(1f),
                 )
                 PrimaryButton(
-                    "Save", { onSave(draft, location, pinned && draft.action.type != "folder") },
+                    "Save", { onSave(draft, location, pinned && draft.action.type != "folder" && !isWidget) },
                     enabled = error == null, modifier = Modifier.padding(end = 8.dp),
                 )
             }
 
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+                // Preview at the item's real proportions (cols x rows cells).
                 Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                    DeckTile(
-                        button = draft,
-                        iconUrl = { appId, device -> (vm.client(device) ?: owner).iconUrl(appId) },
-                        showLabel = true,
-                        editMode = false,
-                        flash = null,
-                        onClick = {},
-                        onLongClick = null,
-                        modifier = Modifier.width(116.dp),
-                    )
+                    val gap = 8.dp
+                    val cell = minOf(96.dp, (300.dp - gap * (draft.cols - 1)) / draft.cols, (200.dp - gap * (draft.rows - 1)) / draft.rows)
+                    val size = Modifier.size(cell * draft.cols + gap * (draft.cols - 1), cell * draft.rows + gap * (draft.rows - 1))
+                    if (isWidget) {
+                        WidgetTile(draft, target, vm, editMode = true, haptics = false, modifier = size)
+                    } else {
+                        DeckTile(
+                            button = draft,
+                            iconUrl = { appId, device -> (vm.client(device) ?: owner).iconUrl(appId) },
+                            showLabel = true,
+                            editMode = false,
+                            flash = null,
+                            onClick = {},
+                            onLongClick = null,
+                            modifier = size,
+                        )
+                    }
                 }
                 if (error != null) {
                     Text(error, style = MaterialTheme.typography.bodySmall, color = p.textDim,
                         modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), textAlign = TextAlign.Center)
                 }
 
+                val type = draft.action.type
+                if (canSwitchKind) {
+                    SectionLabel("Type")
+                    Segmented(
+                        options = listOf(false to "Button", true to "Widget"),
+                        selected = isWidget,
+                        onSelect = { toWidget ->
+                            if (toWidget != isWidget) {
+                                if (toWidget) {
+                                    setWidget(WIDGET_KINDS.first())
+                                } else {
+                                    val a = defaultAction("app").copy(device = draft.action.device)
+                                    draft = draft.copy(widget = null, action = a, label = if (labelTouched) draft.label else "")
+                                }
+                            }
+                        },
+                    )
+                }
+
+                if (isWidget) {
+                    val w = draft.widget!!
+                    SectionLabel("Widget")
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 8.dp)) {
+                        items(WIDGET_KINDS) { k ->
+                            Chip(k.label, selected = w.type == k.type, icon = widgetIcon(k.type), onClick = {
+                                if (w.type != k.type) setWidget(k)
+                            })
+                        }
+                    }
+                    if (servers.size > 1) {
+                        SectionLabel("PC")
+                        DevicePicker(servers, owner.id, draft.action.device) { dev ->
+                            draft = draft.copy(action = draft.action.copy(device = dev))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    DeckCard(Modifier.fillMaxWidth()) {
+                        WidgetConfig(w, target, vm, onApp = { id, name -> setWidget(WIDGET_KINDS.first { it.type == "mixer" }, id, name) })
+                    }
+                } else {
                 SectionLabel("Action")
                 val types = if (inFolder) ACTION_TYPES.filter { it.type != "folder" } else ACTION_TYPES
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 8.dp)) {
@@ -253,7 +344,6 @@ fun ButtonEditor(
                     }
                 }
 
-                val type = draft.action.type
                 if (servers.size > 1 && type != "folder" && type != "wake") {
                     SectionLabel("Run on")
                     DevicePicker(servers, owner.id, draft.action.device) { dev ->
@@ -274,6 +364,48 @@ fun ButtonEditor(
                         else -> ActionConfig(draft.action, target, os, onPickApp = { picker = "action" }, onChange = ::setAction)
                     }
                 }
+                val targetFeatures by target.features.collectAsStateWithLifecycle()
+                if (type == "hotkey" && (targetFeatures.hold || draft.action.hold == true)) {
+                    Spacer(Modifier.height(8.dp))
+                    EditorSwitch(
+                        "Hold while pressed",
+                        "The keys stay down while your finger is on the button, like push-to-talk.",
+                        draft.action.hold == true,
+                    ) { on -> setAction(draft.action.copy(hold = if (on) true else null)) }
+                }
+                if (type !in setOf("folder", "wake") && draft.action.hold != true) {
+                    SectionLabel("Two states")
+                    EditorSwitch(
+                        "Toggle button",
+                        "Presses alternate: the action above turns it on, a second action turns it off. The tile lights up while on.",
+                        draft.toggle != null,
+                    ) { on ->
+                        draft = draft.copy(toggle = if (on) ButtonToggle(action = defaultAction(type).copy(device = draft.action.device)) else null)
+                    }
+                    draft.toggle?.let { t ->
+                        Spacer(Modifier.height(8.dp))
+                        DeckTextField(
+                            value = t.label ?: "",
+                            onValueChange = { draft = draft.copy(toggle = t.copy(label = it.take(40).ifBlank { null })) },
+                            placeholder = "Label while on (optional)",
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        ActionPicker("While on, a press runs", t.action, target, os, onPickApp = { picker = "toggle" }) { a ->
+                            draft = draft.copy(toggle = t.copy(action = a))
+                        }
+                    }
+                    SectionLabel("Long press")
+                    EditorSwitch(
+                        "Long-press action",
+                        "Runs on a long press instead of opening the editor (edit from ⋮ → Edit deck).",
+                        draft.longAction != null,
+                    ) { on -> draft = draft.copy(longAction = if (on) defaultAction("media") else null) }
+                    draft.longAction?.let { la ->
+                        Spacer(Modifier.height(10.dp))
+                        ActionPicker("A long press runs", la, target, os, onPickApp = { picker = "long" }) { a -> draft = draft.copy(longAction = a) }
+                    }
+                }
+                }
 
                 SectionLabel("Label")
                 DeckTextField(
@@ -285,6 +417,10 @@ fun ButtonEditor(
                     placeholder = "Shown under the icon",
                 )
 
+                SectionLabel("Size")
+                SizePicker(draft.cols, draft.rows) { c, r -> draft = draft.copy(cols = c, rows = r) }
+
+                if (!isWidget) {
                 SectionLabel("Icon")
                 val iconKind = draft.icon.kind
                 Segmented(
@@ -325,8 +461,9 @@ fun ButtonEditor(
                 SectionLabel("Color")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     SWATCHES.forEach { hex ->
-                        val c = parseHexColor(hex)
-                        val sel = draft.color == hex
+                        val c = buttonColor(hex, p.accent)
+                        // Buttons saved with the original lime count as the highlight color.
+                        val sel = draft.color == hex || (hex == ACCENT_COLOR && draft.color.equals("#C6F36B", ignoreCase = true))
                         Box(
                             Modifier.size(38.dp).clip(CircleShape)
                                 .background(c ?: p.surface)
@@ -338,15 +475,36 @@ fun ButtonEditor(
                         }
                     }
                 }
+                }
 
-                if (pages.size > 1 && !inFolder) {
-                    SectionLabel("Page")
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        pages.forEach { pg -> Chip(pg.name, selected = targetPage == pg.id, onClick = { targetPage = pg.id }) }
+                val folders = if (type == "folder") emptyList()
+                else pages.find { it.id == targetPage }?.buttons?.filter { it.action.type == "folder" && it.id != draft.id }.orEmpty()
+                if (pages.size > 1 || folders.isNotEmpty()) {
+                    SectionLabel("Place")
+                    if (pages.size > 1) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            pages.forEach { pg ->
+                                Chip(pg.name, selected = targetPage == pg.id, onClick = {
+                                    if (targetPage != pg.id) targetFolder = null
+                                    targetPage = pg.id
+                                })
+                            }
+                        }
+                    }
+                    if (folders.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Chip("On the page", selected = targetFolder == null, onClick = { targetFolder = null })
+                            folders.forEach { f ->
+                                Chip(f.label.ifBlank { "Folder" }, selected = targetFolder == f.id, icon = Icons.Rounded.Folder, onClick = {
+                                    targetFolder = f.id
+                                })
+                            }
+                        }
                     }
                 }
 
-                if (type != "folder") {
+                if (type != "folder" && !isWidget) {
                     SectionLabel("Shortcuts")
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Widgets, null, tint = p.textDim, modifier = Modifier.size(22.dp))
@@ -360,7 +518,7 @@ fun ButtonEditor(
                         }
                         Switch(
                             checked = pinned, onCheckedChange = { pinned = it },
-                            colors = SwitchDefaults.colors(checkedTrackColor = p.accent, checkedThumbColor = p.onAccent),
+                            colors = editorSwitchColors(),
                         )
                     }
                 }
@@ -368,7 +526,17 @@ fun ButtonEditor(
                 if (!isNew) {
                     Spacer(Modifier.height(28.dp))
                     SecondaryButton(
-                        if (confirmDelete) "Tap again to delete" else if (type == "folder") "Delete folder and its buttons" else "Delete button",
+                        if (isWidget) "Duplicate widget" else "Duplicate", { onDuplicate(request.button!!) },
+                        icon = Icons.Rounded.ContentCopy,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryButton(
+                        when {
+                            confirmDelete -> "Tap again to delete"
+                            type == "folder" -> "Delete folder and its buttons"
+                            isWidget -> "Delete widget"
+                            else -> "Delete button"
+                        },
                         { if (confirmDelete) onDelete(draft) else confirmDelete = true },
                         icon = Icons.Rounded.Delete,
                         color = p.danger,
@@ -383,6 +551,11 @@ fun ButtonEditor(
             pick == "action" -> AppPicker(target, "Choose an app", onPick = { app ->
                 setAction(DeckAction(type = "app", appId = app.id, target = app.target, name = app.name, device = draft.action.device))
                 if (draft.icon.kind == "app") draft = draft.copy(icon = ButtonIcon("none"))
+                picker = null
+            }, onClose = { picker = null })
+            pick == "toggle" || pick == "long" -> AppPicker(target, "Choose an app", onPick = { app ->
+                val a = DeckAction(type = "app", appId = app.id, target = app.target, name = app.name)
+                draft = if (pick == "toggle") draft.copy(toggle = draft.toggle?.copy(action = a)) else draft.copy(longAction = a)
                 picker = null
             }, onClose = { picker = null })
             pick == "icon" -> AppPicker(target, "Use an app's icon", onPick = { app ->
@@ -548,7 +721,8 @@ private fun ActionConfig(
             Segmented(
                 options = listOf("toggle" to "Toggle", "mute" to "Mute", "unmute" to "Unmute"),
                 selected = a.op ?: "toggle",
-                onSelect = { onChange(a.copy(op = it), null) },
+                // value = 1 makes "Mute" explicit on servers that treat a bare mute as a toggle.
+                onSelect = { onChange(a.copy(op = it, value = if (it == "mute") 1.0 else null), null) },
                 icons = mapOf("toggle" to Icons.Rounded.SwapVert, "mute" to Icons.Rounded.MicOff, "unmute" to Icons.Rounded.Mic),
             )
             hint(
@@ -622,5 +796,145 @@ private fun LevelConfig(a: DeckAction, onChange: (DeckAction, String?) -> Unit, 
                 colors = SliderDefaults.colors(thumbColor = p.text, activeTrackColor = p.accent, inactiveTrackColor = p.surfaceHigher),
             )
         }
+    }
+}
+
+private fun widgetIcon(type: String): ImageVector = when (type) {
+    "volume" -> Icons.AutoMirrored.Rounded.VolumeUp
+    "mic" -> Icons.Rounded.Mic
+    "mixer" -> Icons.Rounded.Tune
+    "media" -> Icons.Rounded.MusicNote
+    else -> Icons.Rounded.Insights
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WidgetConfig(w: TileWidget, target: DeckClient, vm: DeckViewModel, onApp: (String?, String?) -> Unit) {
+    val p = LocalPalette.current
+    @Composable
+    fun text(s: String) = Text(s, style = MaterialTheme.typography.bodyMedium, color = p.textDim)
+    when (w.type) {
+        "volume" -> text("Drag to set the volume of ${target.server.name}; tap to mute. Wide sizes slide sideways, tall ones up and down.")
+        "mic" -> text("Drag to set the microphone level; tap to mute.")
+        "media" -> text("Shows what is playing, with previous, play/pause and next. One cell: tap the art to play or pause.")
+        "monitor" -> text("Shows CPU and RAM use, plus GPU and disk when the widget is tall enough.")
+        "mixer" -> {
+            // List the apps playing audio on that PC while the editor is open.
+            DisposableEffect(target.id) {
+                val release = vm.holdLive(target.id, stats = false, mixer = true)
+                onDispose { release() }
+            }
+            val mixer by target.mixer.collectAsStateWithLifecycle()
+            Text("App", style = MaterialTheme.typography.labelMedium, color = p.textDim)
+            Spacer(Modifier.height(8.dp))
+            if (mixer.sessions.isEmpty()) {
+                text("No app is playing audio on ${target.server.name} right now. Start it, or type its name below.")
+            } else {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    mixer.sessions.forEach { s ->
+                        Chip(s.name, selected = w.target == s.id || (w.target == null && w.name.equals(s.name, ignoreCase = true)), onClick = {
+                            onApp(s.id, s.name)
+                        })
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            DeckTextField(
+                value = w.name ?: "",
+                onValueChange = { onApp(null, it.take(64).ifBlank { null }) },
+                placeholder = "App name, e.g. Discord",
+            )
+            Spacer(Modifier.height(6.dp))
+            Text("The app is found by name again after it restarts.", style = MaterialTheme.typography.bodySmall, color = p.textFaint)
+        }
+    }
+}
+
+/** Tap a cell to make the item that many rows and columns (up to 4 x 4). */
+@Composable
+private fun SizePicker(cols: Int, rows: Int, onPick: (Int, Int) -> Unit) {
+    val p = LocalPalette.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            for (r in 0 until MAX_SPAN) {
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    for (c in 0 until MAX_SPAN) {
+                        val on = r < rows && c < cols
+                        Box(
+                            Modifier.size(34.dp).clip(RoundedCornerShape(8.dp))
+                                .background(if (on) p.accent else p.surfaceHigh)
+                                .clickable { onPick(c + 1, r + 1) }
+                                .semantics { contentDescription = "${r + 1} by ${c + 1}" },
+                        )
+                    }
+                }
+            }
+        }
+        Column(Modifier.padding(start = 16.dp)) {
+            Text("$rows × $cols", style = MaterialTheme.typography.titleMedium, color = p.text)
+            Text("rows × columns", style = MaterialTheme.typography.bodySmall, color = p.textDim)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Items wider than the screen's columns are narrowed to fit.",
+                style = MaterialTheme.typography.bodySmall, color = p.textFaint,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditorSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val p = LocalPalette.current
+    Row(
+        Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onChange).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = p.text)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = p.textDim)
+        }
+        Switch(
+            checked = checked, onCheckedChange = null,
+            colors = editorSwitchColors(),
+        )
+    }
+}
+
+/** Same switch look as Settings: the "off" thumb stays visible on the dark track. */
+@Composable
+private fun editorSwitchColors(): androidx.compose.material3.SwitchColors {
+    val p = LocalPalette.current
+    return SwitchDefaults.colors(
+        checkedThumbColor = p.onAccent,
+        checkedTrackColor = p.accent,
+        uncheckedThumbColor = p.textDim,
+        uncheckedTrackColor = p.surfaceHigh,
+        uncheckedBorderColor = p.outline,
+    )
+}
+
+/** Action type chips plus that action's settings, for a toggle's second action or a long press. */
+@Composable
+private fun ActionPicker(
+    title: String,
+    action: DeckAction,
+    target: DeckClient,
+    os: String,
+    onPickApp: () -> Unit,
+    onChange: (DeckAction) -> Unit,
+) {
+    val p = LocalPalette.current
+    Text(title, style = MaterialTheme.typography.labelMedium, color = p.textDim)
+    Spacer(Modifier.height(8.dp))
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(end = 8.dp)) {
+        items(STEP_TYPES) { t ->
+            Chip(t.label, selected = action.type == t.type, icon = t.icon, onClick = {
+                if (action.type != t.type) onChange(defaultAction(t.type))
+            })
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    DeckCard(Modifier.fillMaxWidth()) {
+        ActionConfig(action, target, os, onPickApp = onPickApp, onChange = { a, _ -> onChange(a) })
     }
 }

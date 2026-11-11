@@ -1,5 +1,7 @@
 package dev.menggu.androiddeck
 
+import androidx.glance.appwidget.updateAll
+import dev.menggu.androiddeck.quick.ControlsWidget
 import android.app.Application
 import android.os.Build
 import android.provider.Settings as AndroidSettings
@@ -49,6 +51,9 @@ import javax.net.ssl.SSLException
 /** Where a button lives: on a page, or inside a folder button on that page. */
 data class Location(val pageId: String, val folderId: String? = null)
 
+/** A snackbar line, optionally with one action such as "Undo". */
+class UiMessage(val text: String, val action: String? = null, val onAction: (() -> Unit)? = null)
+
 @Serializable
 private data class DeckExport(val format: String = "androiddeck.deck", val version: Int = 1, val profile: Profile)
 
@@ -57,6 +62,8 @@ private data class DeckExport(val format: String = "androiddeck.deck", val versi
  * can target any PC. Discovery runs continuously while the app is visible: it heals changed IP
  * addresses of paired PCs and surfaces new PCs for pairing.
  */
+private const val ACK_TIMEOUT_MS = 3_000L
+
 class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
 
@@ -87,8 +94,8 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     private val _shortcuts = MutableStateFlow(prefs.loadShortcuts())
     val shortcuts: StateFlow<List<Shortcut>> = _shortcuts.asStateFlow()
 
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    val messages: SharedFlow<String> = _messages.asSharedFlow()
+    private val _messages = MutableSharedFlow<UiMessage>(extraBufferCapacity = 8)
+    val messages: SharedFlow<UiMessage> = _messages.asSharedFlow()
 
     /** buttonId -> success flag, shown briefly as a ring on the tile. */
     private val _flashes = MutableStateFlow<Map<String, Boolean>>(emptyMap())
@@ -179,6 +186,8 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     fun select(id: String) {
         _selectedId.value = id
         prefs.selectedId = id
+        // The home-screen controls follow the selected PC.
+        viewModelScope.launch { runCatching { ControlsWidget().updateAll(getApplication()) } }
     }
 
     fun forget(id: String) {
@@ -278,8 +287,48 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- actions --------------------------------------------------------------------------------
 
+    private val _toggled = MutableStateFlow(prefs.loadToggled())
+    /** Two-state buttons that are on. */
+    val toggled: StateFlow<Set<String>> = _toggled.asStateFlow()
+    private val pendingToggles = ConcurrentHashMap<String, String>()
+
+    private fun flipToggle(buttonId: String) {
+        _toggled.update { if (buttonId in it) it - buttonId else it + buttonId }
+        prefs.saveToggled(_toggled.value)
+    }
+
+    /** Push-to-talk: keys go down on press and up on release. */
+    fun hold(button: DeckButton, deckOwner: DeckClient?, down: Boolean) {
+        val keys = button.action.keys.orEmpty()
+        if (keys.isEmpty()) return
+        val c = targetOf(button.action, deckOwner) ?: return
+        if (!c.isConnected) {
+            if (down) {
+                flash(button.id, false)
+                message("${c.server.name} is not connected")
+            }
+            return
+        }
+        c.holdKeys(keys, down)
+    }
+
+    /** Runs a button's long-press action, with the same feedback as a press. */
+    fun pressLong(button: DeckButton, deckOwner: DeckClient?) {
+        val a = button.longAction ?: return
+        press(button.copy(action = a, toggle = null), deckOwner)
+    }
+
     fun press(button: DeckButton, deckOwner: DeckClient?) {
-        val action = button.action
+        // A two-state button that is on runs its second action, then turns off (and the reverse).
+        val toggle = button.toggle
+        if (toggle != null && button.id in _toggled.value) {
+            val second = toggle.action.copy(device = toggle.action.device ?: button.action.device)
+            return pressAction(button, second, deckOwner, toggles = true)
+        }
+        pressAction(button, button.action, deckOwner, toggles = toggle != null)
+    }
+
+    private fun pressAction(button: DeckButton, action: DeckAction, deckOwner: DeckClient?, toggles: Boolean) {
         when (action.type) {
             "none", "folder" -> return
             "wake" -> {
@@ -295,7 +344,27 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
             message("${c.server.name} is not connected")
         } else {
             pendingActions[rid] = button.id
+            if (toggles) {
+                // Flip right away; a failure or timeout flips it back.
+                flipToggle(button.id)
+                pendingToggles[rid] = button.id
+            }
+            viewModelScope.launch {
+                delay(ackTimeout(action))
+                if (pendingActions.remove(rid) != null) {
+                    pendingToggles.remove(rid)?.let(::flipToggle)
+                    flash(button.id, false)
+                    message("No response from ${c.server.name}")
+                }
+            }
         }
+    }
+
+    /** Time to wait for an ack: a base, plus multi-action delays and typing time. */
+    private fun ackTimeout(a: DeckAction): Long {
+        fun extra(x: DeckAction): Long =
+            (x.delay ?: 0).toLong() + (x.text?.length ?: 0) * 30L + (x.steps?.sumOf { extra(it) } ?: 0L)
+        return ACK_TIMEOUT_MS + extra(a)
     }
 
     fun run(action: DeckAction) {
@@ -317,6 +386,7 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onAck(a: Ack) {
         val buttonId = pendingActions.remove(a.id)
+        pendingToggles.remove(a.id)?.let { if (!a.ok) flipToggle(it) }
         if (!a.ok) message(a.error ?: "Action failed")
         if (buttonId != null) flash(buttonId, a.ok)
     }
@@ -339,10 +409,39 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         applySubscriptions()
     }
 
-    /** Stats stream from every PC while the System tab is open; the mixer only from the selected PC. */
+    /** Per PC: how many widgets on screen need the stats and mixer streams. Main thread only. */
+    private val liveHolds = mutableMapOf<String, IntArray>()
+
+    /** Keeps a PC's stats and/or mixer stream on until the returned function is called. */
+    fun holdLive(clientId: String, stats: Boolean, mixer: Boolean): () -> Unit {
+        val h = liveHolds.getOrPut(clientId) { IntArray(2) }
+        if (stats) h[0]++
+        if (mixer) h[1]++
+        applySubscriptions()
+        var released = false
+        return {
+            if (!released) {
+                released = true
+                if (stats) h[0]--
+                if (mixer) h[1]--
+                applySubscriptions()
+            }
+        }
+    }
+
+    /**
+     * Stats stream from every PC while the System tab is open, the mixer from the selected PC while
+     * Audio is open, and either from any PC a widget on screen needs.
+     */
     private fun applySubscriptions() {
         val sel = selected.value?.id
-        _clients.value.values.forEach { it.setSubscriptions(stats = monitorVisible, mixer = audioVisible && it.id == sel) }
+        _clients.value.values.forEach {
+            val h = liveHolds[it.id]
+            it.setSubscriptions(
+                stats = monitorVisible || (h?.get(0) ?: 0) > 0,
+                mixer = (audioVisible && it.id == sel) || (h?.get(1) ?: 0) > 0,
+            )
+        }
     }
 
     // ---- profile editing ------------------------------------------------------------------------
@@ -408,6 +507,11 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
+    private fun Profile.listAt(loc: Location): List<DeckButton> {
+        val page = pages.find { it.id == loc.pageId } ?: return emptyList()
+        return if (loc.folderId == null) page.buttons else page.buttons.find { it.id == loc.folderId }?.children.orEmpty()
+    }
+
     private fun Profile.mapList(loc: Location, f: (List<DeckButton>) -> List<DeckButton>): Profile =
         copy(pages = pages.map { page ->
             when {
@@ -437,9 +541,44 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteButton(buttonId: String) {
+        val before = selected.value?.profile?.value
+        val loc = before?.locate(buttonId)
+        val list = loc?.let { before.listAt(it) }.orEmpty()
+        val index = list.indexOfFirst { it.id == buttonId }
+        val removed = list.getOrNull(index)
+        val pinned = _shortcuts.value.filter { it.button.id == buttonId }
         editProfile { p -> p.copy(pages = p.pages.map { it.copy(buttons = it.buttons.removeId(buttonId)) }) }
-        updateShortcuts { list -> list.filterNot { it.button.id == buttonId } }
+        updateShortcuts { all -> all.filterNot { it.button.id == buttonId } }
+        if (removed != null && loc != null) {
+            message("Deleted “${removed.label.ifBlank { "button" }}”", "Undo") {
+                editProfile { p -> p.mapList(loc) { l -> l.toMutableList().apply { add(index.coerceIn(0, size), removed) } } }
+                if (pinned.isNotEmpty()) updateShortcuts { all -> all + pinned.filterNot { s -> all.any { it.button.id == s.button.id } } }
+            }
+        }
     }
+
+    /** Copies a button (and a folder's contents) right after the original. */
+    fun duplicateButton(buttonId: String) {
+        editProfile { p ->
+            val loc = p.locate(buttonId) ?: return@editProfile p
+            p.mapList(loc) { list ->
+                val i = list.indexOfFirst { it.id == buttonId }
+                if (i < 0) return@mapList list
+                val b = list[i]
+                val copy = b.copy(id = newId(), children = b.children?.map { it.copy(id = newId()) })
+                list.toMutableList().apply { add(i + 1, copy) }
+            }
+        }
+    }
+
+    /** Reorders the widget / Quick Settings buttons (the first ones are the tiles). */
+    fun moveShortcut(index: Int, delta: Int) = updateShortcuts { list ->
+        val to = index + delta
+        if (index !in list.indices || to !in list.indices) list
+        else list.toMutableList().apply { add(to, removeAt(index)) }
+    }
+
+    fun removeShortcut(index: Int) = updateShortcuts { list -> list.filterIndexed { i, _ -> i != index } }
 
     fun reorder(loc: Location, buttons: List<DeckButton>) = editProfile { p -> p.mapList(loc) { buttons } }
 
@@ -508,12 +647,20 @@ class DeckViewModel(app: Application) : AndroidViewModel(app) {
     // ---- settings & messages --------------------------------------------------------------------
 
     fun updateSettings(f: (Settings) -> Settings) {
+        val before = _settings.value
         _settings.update(f)
         prefs.saveSettings(_settings.value)
+        if (before.accent != _settings.value.accent) {
+            viewModelScope.launch { QuickActions.refreshSurfaces(getApplication()) }
+        }
+    }
+
+    fun message(text: String, action: String, onAction: () -> Unit) {
+        _messages.tryEmit(UiMessage(text, action, onAction))
     }
 
     fun message(text: String) {
-        _messages.tryEmit(text)
+        _messages.tryEmit(UiMessage(text))
     }
 
     companion object {

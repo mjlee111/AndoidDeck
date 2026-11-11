@@ -69,13 +69,26 @@ After pairing, the app connects on its own every time. Add more PCs from the PC 
 
 ## Usage
 
-- **Layout**: buttons are sized so the whole page fits and stays centered (tuned for small screens such as the Galaxy Z Fold cover display). Settings → *Button size* switches from *Auto* to Small/Medium/Large with scrolling; *Full screen* hides the status and navigation bars (swipe from an edge to show them).
-- **Edit mode**: ⋮ (top right) → *Edit deck* → tap a button to edit it, `+` to add one, long-press and drag to reorder, *Done* to finish. Outside edit mode, long-press a button to edit it directly.
+- **Navigation**: swipe left and right. The deck's pages come first, then Audio, System and Touch (last, since the trackpad takes every touch); swiping the top bar also changes screens. The icons at the top show where you are and jump there when tapped. Dots under the deck show its pages, and the page name appears briefly when you swipe to it. Back leaves edit mode, then returns to the first deck page, before leaving the app.
+- **Highlight color**: Settings → *Highlight color* picks the accent (Lime by default, seven other presets, or a custom color from the hue slider or a hex code). It colors selection, sliders, the widget and buttons set to the highlight color, including the default Play button.
+- **Layout**: landscape by default (Settings → *Orientation*: Landscape / Portrait / Auto). Buttons are sized so the whole page fits and stays centered on the screen, with equal margins around the camera cutout (tuned for the Galaxy Z Fold cover display). Settings → *Button size* switches from *Auto* to Small/Medium/Large with scrolling; *Full screen* hides the status and navigation bars (swipe from an edge to show them). Audio and System split their sections into as many columns as the screen needs, so they fit without scrolling where possible (only long lists such as many mixer apps or the System details scroll).
+- **Edit mode**: ⋮ (top right) → *Edit deck* → tap a button to edit it, `+` to add one, long-press and drag to reorder, *Done* to finish. Page tabs appear in edit mode: *+ Page* adds a page, tapping the selected tab renames, moves, copies or deletes it. Outside edit mode, long-press a button to edit it directly. Every page uses the same grid, sized for the fullest page, so buttons keep their size between pages and when edit mode starts.
+- **Lock deck**: ⋮ → *Lock deck* stops long presses from opening the editor and hides *Edit deck* (for example while streaming); ⋮ → *Unlock deck* undoes it.
+- **Organizing**: the editor's *Place* moves a button to another page or into or out of a folder; *Duplicate* copies it next to the original; a deleted button can be restored with *Undo* in the message that follows.
+- **Toggle buttons**: *Two states → Toggle button* makes presses alternate between the button's action (turns it on) and a second action (turns it off). While on, the tile lights up with an *ON* badge and an optional second label. The on/off state is kept on the phone.
+- **Push-to-talk**: a *Hotkey* button with *Hold while pressed* keeps its keys down while your finger is on the button. The PC releases them if the phone disconnects.
+- **Long press**: *Long press → Long-press action* runs a second action on a long press instead of opening the editor (edit those buttons from ⋮ → *Edit deck*).
 - **Folders**: choose *Folder* as the action type and save. In edit mode, tap the folder to open it and add buttons. Rename or recolor it with the pencil inside the folder.
 - **Multi-actions**: *Multi* → add steps and set each step's delay and action. If a step fails, the error names it ("step N: …").
 - **Targeting another PC**: with two or more PCs paired, the editor shows *Run on*. Buttons that target another PC show a small PC icon in the top-right corner.
 - **Wake-on-LAN**: the app remembers the MAC address of every PC it has connected to once. Wake an offline PC with *Wake* in the banner or device list, or with a *Wake PC* button. Wake-on-LAN must be enabled in the PC's BIOS / network adapter settings.
-- **Widget & tiles**: turn on *Show in widget & quick tiles* in the button editor, then add the *Deck buttons* widget to the home screen or the *Deck 1–3* tiles to Quick Settings (the first three pinned buttons become tiles).
+- **Sizes**: in the button editor, *Size* sets rows × columns (up to 4 × 4) for any button or widget, wide or tall. Items wider than the screen's columns are narrowed; items keep their order, and a tall item leaves room beside it for the next ones.
+- **Widgets**: in the editor, *Type → Widget* adds a live control instead of a button: *Volume* or *Mic level* (a fader), *App volume* (one app's level and mute; found again by name after the app restarts), *Now playing* (art, title, previous / play-pause / next) and *PC monitor* (CPU, RAM, plus GPU and disk when tall enough). Faders: drag along the long side, tap to mute; wide ones slide sideways, square and tall ones up and down. Widgets need the updated PC server (older servers drop them when the deck is saved).
+- **Live state**: Mic and Mute buttons turn red with a *MUTED* badge while muted; play/pause shows when media plays. When the PC goes offline the deck dims and live state is cleared until it reconnects. A press that fails, or gets no answer within about 3 s (longer for multi-actions with delays), flashes the tile red and buzzes differently from a normal press.
+- **Mic actions**: *Toggle* flips the mic, *Mute* always mutes and *Unmute* always unmutes, so a "going AFK" multi-action can never turn the mic on. The volume *Mute* button stays a toggle.
+- **Sliders**: drag to change a level; the change is relative to where your finger lands, and a plain tap changes nothing. Use the − / + buttons for single steps.
+- **Widget & tiles**: turn on *Show in widget & quick tiles* in the button editor, then add the *Deck buttons* widget to the home screen or the *Deck 1–3* tiles to Quick Settings (the first three pinned buttons become tiles; reorder them in Settings → *Widget & quick tiles*).
+- **PC controls widget**: a home-screen widget for the PC selected in the app: volume (− / level / + / mute) at 4 × 1, plus mic, media (previous / play-pause / next, title) when taller, and CPU / RAM at full height. It updates after each press, on its refresh button and every 30 minutes; home-screen widgets cannot drag, so levels change in steps.
 - **Touch tab**: the screen becomes a trackpad. The keyboard button sends what you type on the phone to the PC as you type. Pointer speed and scroll direction are in Settings.
 - **Backup**: Settings → *Deck backup* to export or import. To send a single page to another PC, tap the selected page tab again in edit mode → *Copy this page to*.
 
@@ -131,9 +144,10 @@ Set the `ANDROIDDECK_HOME` environment variable to use a different folder (porta
 | `POST /api/pair` | `{pin, device}` → `{token, server, wol}` |
 | `GET /api/apps[?refresh=1]`, `GET /api/icon/{id}` | App list, icons |
 | `GET /api/media/art` | Now-playing album art (local file or system thumbnail) |
-| `GET/PUT /api/profile` | Deck layout |
+| `GET/PUT /api/profile` | Deck layout; buttons may carry `cols` / `rows` (1–4), a `widget` (`volume`, `mic`, `mixer`, `media`, `monitor`), a `toggle` (second action, label, color), a `longAction`, and hotkey actions `hold: true` |
 | `POST /api/action` | One-shot action (widget and tiles) |
-| `GET /ws` | Live channel: send `action` · `sub` · `mouse` · `scroll` · `click` · `button` · `type` · `key`; receive `welcome` · `ack` · `stats` · `volume` · `mic` · `mixer` · `media` · `profile` |
+| `GET /api/state` | Volume, mic, media and CPU / RAM in one response (home-screen controls widget) |
+| `GET /ws` | Live channel: send `action` · `sub` · `mouse` · `scroll` · `click` · `button` · `type` · `key` · `hold` (key combo down/up, released on disconnect); receive `welcome` · `ack` · `stats` · `volume` · `mic` · `mixer` · `media` · `profile` |
 
 Every request except `/api/info` and `/api/pair` needs `Authorization: Bearer <token>`. Ports: TCP 47777 (HTTPS / WSS) and UDP 47778 (discovery).
 
@@ -141,7 +155,7 @@ Every request except `/api/info` and `/api/pair` needs `Authorization: Bearer <t
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Push to `main`, PRs, manual | Builds and lints the Android app; runs ruff and the [smoke test](server/tests/smoke_test.py) on Ubuntu, Windows and macOS, then **builds the standalone executable and smoke-tests that executable too** |
+| [`ci.yml`](.github/workflows/ci.yml) | Push to `main`, PRs, manual | Builds, unit-tests (JVM + Robolectric layout smoke tests) and lints the Android app; runs ruff and the [smoke test](server/tests/smoke_test.py) on Ubuntu, Windows and macOS, then **builds the standalone executable and smoke-tests that executable too** |
 | [`release.yml`](.github/workflows/release.yml) | `v*` tag push, manual | Attaches a signed APK, per-OS server executables, a source zip and `SHA256SUMS.txt` to a **draft release**; a person publishes it |
 
 The smoke test starts the server in an isolated folder and checks TLS pinning, discovery, pairing, the app list and icons, the profile, multi-actions, the mixer, the WebSocket channel and the control panel (secret path, Host/Origin checks, new PIN, unpair closes the session). It never sends actions that affect the PC.
@@ -164,7 +178,8 @@ Back up the key file and passwords outside the repository. If they are lost, exi
 
 Verified in this repository (Linux, Ubuntu 24.04 GNOME Wayland / PipeWire):
 
-- Server smoke test, 35 checks passing (fresh venv, both from source and as the PyInstaller executable): TLS and wrong-fingerprint rejection, discovery, pairing, 67 apps / 66 icons, profile validation, multi-actions with failing-step reporting, mixer, stats
+- Android unit tests, 29 passing (`./gradlew :app:testDebugUnitTest`): deck grid fit at Fold cover and inner sizes, section column split (checked against brute force), highlight colors and text contrast ≥ 4.5:1, span packing (order kept, no overlaps), one grid for every page with no change when edit mode starts, JSON round trips of sizes / toggles / hold / long press and of the live-state response, home-widget control actions, section layout in landscape/portrait, muted/offline tile states and every widget at four sizes (Robolectric)
+- Server smoke test, 48 checks passing (fresh venv, both from source and as the PyInstaller executable): TLS and wrong-fingerprint rejection, discovery, pairing, 67 apps / 66 icons, profile validation, multi-actions with failing-step reporting, mixer, stats
 - Per-app mixer: listing, volume (0.42 round-trip) and mute on a real playback stream
 - Now playing: title (quotes and Korean), artist, local album art and play/pause command against a fake MPRIS player
 - Wake-on-LAN info (MAC, broadcast) extraction, tray mode startup, start-at-login on/off
@@ -178,7 +193,8 @@ Not yet verified: **running on Windows and macOS** (PowerShell icon extraction, 
 | # | Step | Pass criterion |
 |---|---|---|
 | 1 | Start the server, open the app | PC appears within 2–3 s; fingerprint in the PIN dialog = fingerprint on the PC |
-| 2 | Vol ± / Mute / Mic on the default deck | PC volume changes; Mic button dot turns red (muted) ↔ green |
+| 2 | Vol ± / Mute / Mic on the default deck | PC volume changes; Mic tile turns red with *MUTED* (muted) ↔ green dot |
+| 2a | A *Mic: Mute* button while the mic is already muted, on each OS | Mic stays muted |
 | 3 | Audio tab | Current track and album art shown; an app slider changes only that app's volume |
 | 4 | Add an App button → tap it | Real icon shown; the app launches on the PC |
 | 5 | Folder and Multi buttons | Folder opens; multi-action steps run in order with their delays |
@@ -189,6 +205,8 @@ Not yet verified: **running on Windows and macOS** (PowerShell icon extraction, 
 | 10 | Reboot the PC (start at sign-in is on by default) | Server starts after sign-in; phone reconnects automatically |
 | 11 | Click the tray icon, or start AndroidDeck Server again | Control panel opens with the current PIN; *New PIN* and *Unpair* work |
 | 12 | Export deck → import (add) | Pages are duplicated and appended |
+| 13 | A push-to-talk button: hold it, then turn the phone's Wi-Fi off | The key is released on the PC when the connection drops |
+| 14 | *PC controls* widget on the home screen | Volume, mute and play/pause act on the selected PC; the widget shows the new state after each press |
 
 If something goes wrong, run the server with `-v` or check `server.log`.
 

@@ -68,6 +68,8 @@ data class Features(
     val mixer: Boolean = false,
     val media: Boolean = false,
     val commands: Boolean = true,
+    /** The PC can hold key combos down (push-to-talk buttons). */
+    val hold: Boolean = false,
 )
 
 // ---- Deck profile (stored on the PC) ------------------------------------------------------------
@@ -91,7 +93,29 @@ data class DeckButton(
     val action: DeckAction = DeckAction(),
     /** Contents when action.type == "folder" (one level deep). */
     val children: List<DeckButton>? = null,
+    /** Size on the deck grid in cells, 1..[MAX_SPAN] each way. */
+    val cols: Int = 1,
+    val rows: Int = 1,
+    /** A live control shown instead of a button; null = a regular button. Its PC is action.device. */
+    val widget: TileWidget? = null,
+    /** Two-state button: presses alternate between [action] (turns it on) and [ButtonToggle.action]. */
+    val toggle: ButtonToggle? = null,
+    /** Runs on a long press (outside edit mode) instead of opening the editor. */
+    val longAction: DeckAction? = null,
 )
+
+/** The "on" state of a two-state button: what the next press does, and how the tile looks meanwhile. */
+@Serializable
+data class ButtonToggle(val action: DeckAction = DeckAction(), val label: String? = null, val color: String? = null)
+
+const val MAX_SPAN = 4
+
+/**
+ * type: "volume" | "mic" (level slider), "mixer" (one app's volume; [target] is the session id, [name]
+ * the app name used when the id changes), "media" (now playing + controls), "monitor" (CPU and RAM).
+ */
+@Serializable
+data class TileWidget(val type: String, val target: String? = null, val name: String? = null)
 
 /**
  * kind: "none" (derived from the action), "symbol" (built-in vector), "app" (PC app icon).
@@ -120,6 +144,8 @@ data class DeckAction(
     val url: String? = null,
     val command: String? = null,
     val device: String? = null,
+    /** hotkey: keep the keys down while the button is pressed (push-to-talk). */
+    val hold: Boolean? = null,
     /** Steps of a "multi" action, each optionally preceded by [delay] milliseconds. */
     val steps: List<DeckAction>? = null,
     val delay: Int? = null,
@@ -163,6 +189,19 @@ data class MediaState(
 /** A deck button pinned to the home-screen widget / quick-settings tiles (snapshot). */
 @Serializable
 data class Shortcut(val serverId: String, val button: DeckButton)
+
+/** One-shot live state (GET /api/state) for the home-screen controls widget. */
+@Serializable
+data class LiveState(
+    val name: String? = null,
+    val volume: VolumeState = VolumeState(),
+    val mic: VolumeState = VolumeState(),
+    val media: MediaState = MediaState(),
+    val usage: Usage? = null,
+)
+
+@Serializable
+data class Usage(val cpu: Double = 0.0, val mem: Double = 0.0)
 
 fun shortFingerprint(fp: String?): String =
     fp?.take(16)?.uppercase()?.chunked(4)?.joinToString(" ") ?: "–"

@@ -173,8 +173,15 @@ class ActionRunner:
         elif op in ("up", "down"):
             step = abs(float(value)) if value else 0.05
             await self.audio.step(which, step if op == "up" else -step)
-        elif op in ("mute", "toggle"):
+        elif op == "toggle":
             await self.audio.set_mute(which, None if value is None else bool(value))
+        elif op == "mute":
+            # Mic "Mute" must never unmute (it is used in "going AFK" multi-actions). Volume "Mute"
+            # without a value stays a toggle: the default deck and the Audio screen rely on that.
+            if value is None:
+                await self.audio.set_mute(which, True if which == INPUT else None)
+            else:
+                await self.audio.set_mute(which, bool(value))
         elif op == "unmute":
             await self.audio.set_mute(which, False)
         else:

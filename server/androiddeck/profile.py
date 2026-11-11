@@ -77,9 +77,9 @@ def default_profile() -> dict[str, Any]:
     ]
     return {
         "version": 1,
+        # One page: an empty second page would be the first thing a new user swipes to.
         "pages": [
             {"id": _id(), "name": "Main", "buttons": main},
-            {"id": _id(), "name": "Apps", "buttons": []},
         ],
     }
 
@@ -119,6 +119,11 @@ def validate_action(a: Any, nested: bool = False) -> dict[str, Any]:
         if not isinstance(a["value"], (int, float)):
             raise ProfileError("action.value must be a number")
         out["value"] = float(a["value"])
+    if "hold" in a and a["hold"] is not None:
+        if not isinstance(a["hold"], bool):
+            raise ProfileError("action.hold must be true or false")
+        if a["hold"]:
+            out["hold"] = True
     if "delay" in a and a["delay"] is not None:
         if not isinstance(a["delay"], (int, float)) or not 0 <= a["delay"] <= MAX_STEP_DELAY_MS:
             raise ProfileError(f"action.delay must be 0..{MAX_STEP_DELAY_MS} ms")
@@ -129,6 +134,48 @@ def validate_action(a: Any, nested: bool = False) -> dict[str, Any]:
             raise ProfileError(f"action.steps must be a list of up to {MAX_STEPS} actions")
         out["steps"] = [validate_action(step, nested=True) for step in steps]
     return out
+
+
+MAX_SPAN = 4
+WIDGET_TYPES = ("volume", "mic", "mixer", "media", "monitor")
+
+
+def _validate_layout(b: dict[str, Any], out: dict[str, Any]) -> None:
+    """Grid size in cells and the optional live widget (slider, media, monitor)."""
+    for key in ("cols", "rows"):
+        v = b.get(key, 1)
+        if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= MAX_SPAN:
+            raise ProfileError(f"button.{key} must be a whole number 1..{MAX_SPAN}")
+        if v != 1:
+            out[key] = v
+    w = b.get("widget")
+    if w is None:
+        return
+    if not isinstance(w, dict) or w.get("type") not in WIDGET_TYPES:
+        raise ProfileError("button.widget.type must be one of " + ", ".join(WIDGET_TYPES))
+    widget = {"type": w["type"]}
+    for key in ("target", "name"):
+        value = _str(w.get(key), f"widget.{key}")
+        if value is not None:
+            widget[key] = value
+    out["widget"] = widget
+
+
+def _validate_extras(b: dict[str, Any], out: dict[str, Any]) -> None:
+    """Optional second behaviours: a two-state toggle and a long-press action."""
+    t = b.get("toggle")
+    if t is not None:
+        if not isinstance(t, dict):
+            raise ProfileError("button.toggle must be an object")
+        toggle: dict[str, Any] = {"action": validate_action(t.get("action") or {"type": "none"}, nested=True)}
+        for key in ("label", "color"):
+            value = _str(t.get(key), f"toggle.{key}")
+            if value is not None:
+                toggle[key] = value
+        out["toggle"] = toggle
+    la = b.get("longAction")
+    if la is not None:
+        out["longAction"] = validate_action(la, nested=True)
 
 
 def _validate_button(b: Any, in_folder: bool = False) -> dict[str, Any]:
@@ -149,6 +196,8 @@ def _validate_button(b: Any, in_folder: bool = False) -> dict[str, Any]:
         "color": _str(b.get("color"), "button.color"),
         "action": action,
     }
+    _validate_layout(b, out)
+    _validate_extras(b, out)
     if action["type"] == "folder":
         if in_folder:
             raise ProfileError("folders cannot contain folders")

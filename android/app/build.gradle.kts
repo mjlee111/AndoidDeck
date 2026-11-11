@@ -53,6 +53,11 @@ android {
         disable += setOf("NewerVersionAvailable", "GradleDependency", "AndroidGradlePluginVersion")
         abortOnError = true
     }
+    testOptions {
+        // Robolectric renders Compose screens in JVM unit tests (layout smoke tests).
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.maxHeapSize = "3g" }
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -88,4 +93,10 @@ dependencies {
     implementation(libs.coil.svg)
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.work.runtime.ktx)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(composeBom)
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

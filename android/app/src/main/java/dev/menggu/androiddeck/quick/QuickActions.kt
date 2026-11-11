@@ -41,6 +41,7 @@ object QuickActions {
     /** Re-renders the widget and asks the system to refresh the tiles. */
     suspend fun refreshSurfaces(context: Context) {
         runCatching { DeckWidget().updateAll(context) }
+        runCatching { ControlsWidget().updateAll(context) }
         for (cls in listOf(QuickTile1::class.java, QuickTile2::class.java, QuickTile3::class.java)) {
             runCatching { TileService.requestListeningState(context, ComponentName(context, cls)) }
         }

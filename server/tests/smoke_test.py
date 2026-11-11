@@ -116,6 +116,12 @@ async def run_checks(base: str, home: Path, args: argparse.Namespace, check: Che
             check(r.status == 422, "HTTP action endpoint reports errors", r.status)
         async with s.get(base + "/api/media/art", headers=headers) as r:
             check(r.status in (200, 404), "artwork endpoint answers", r.status)
+        async with s.get(base + "/api/state", headers=headers) as r:
+            st = await r.json() if r.status == 200 else {}
+            check(r.status == 200 and "volume" in st and "media" in st and "usage" in st,
+                  "live state for home-screen widgets", {k: st.get(k) for k in ("volume", "usage")})
+        async with s.get(base + "/api/state") as r:
+            check(r.status == 401, "live state needs a token", r.status)
 
         # App index: the first scan may still be running (Windows extracts icons via PowerShell).
         apps: list = []
@@ -147,6 +153,34 @@ async def run_checks(base: str, home: Path, args: argparse.Namespace, check: Che
             check(r.status == 200 and saved["pages"][0]["name"] == "CI", "profile round-trip")
         async with s.put(base + "/api/profile", headers=headers, json={"pages": "nope"}) as r:
             check(r.status == 400, "invalid profile is rejected", r.status)
+
+        # Sized buttons and live widgets survive a round trip; bad sizes are refused.
+        sized = json.loads(json.dumps(saved))
+        sized["pages"][0]["buttons"].append({"label": "Vol", "cols": 3, "rows": 1, "widget": {"type": "volume"},
+                                             "action": {"type": "none"}})
+        sized["pages"][0]["buttons"].append({"label": "Stream", "action": {"type": "hotkey", "keys": ["f13"], "hold": True},
+                                             "toggle": {"label": "Live", "action": {"type": "hotkey", "keys": ["f14"]}},
+                                             "longAction": {"type": "media", "key": "next"}})
+        sized["pages"][0]["buttons"].append({"label": "Discord", "cols": 1, "rows": 2,
+                                             "widget": {"type": "mixer", "target": "Discord.exe", "name": "Discord"},
+                                             "action": {"type": "none"}})
+        async with s.put(base + "/api/profile", headers=headers, json=sized) as r:
+            body3 = await r.json() if r.status == 200 else {}
+            got = body3.get("pages", [{}])[0].get("buttons", [])[-3:]
+            extra = got.pop(1) if len(got) == 3 else {}
+            check(extra.get("action", {}).get("hold") is True and extra.get("toggle", {}).get("label") == "Live"
+                  and extra.get("longAction", {}).get("key") == "next", "toggle, hold and long-press survive a round trip", extra)
+            check(r.status == 200 and got[0].get("cols") == 3 and got[0].get("widget") == {"type": "volume"}
+                  and got[1].get("rows") == 2 and got[1]["widget"].get("target") == "Discord.exe",
+                  "sized buttons and widgets round-trip", got)
+        bad = json.loads(json.dumps(saved))
+        bad["pages"][0]["buttons"][0]["cols"] = 9
+        async with s.put(base + "/api/profile", headers=headers, json=bad) as r:
+            check(r.status == 400, "out-of-range button size is rejected", r.status)
+        bad["pages"][0]["buttons"][0]["cols"] = 1
+        bad["pages"][0]["buttons"][0]["widget"] = {"type": "toaster"}
+        async with s.put(base + "/api/profile", headers=headers, json=bad) as r:
+            check(r.status == 400, "unknown widget type is rejected", r.status)
 
         async with s.ws_connect(base + "/ws", headers=headers) as ws:
             first = await asyncio.wait_for(ws.receive_json(), 10)
@@ -240,6 +274,46 @@ async def panel_checks(s: aiohttp.ClientSession, base: str, home: Path, headers:
             check(r.status == 401, "unpaired phone's token is rejected", r.status)
 
 
+def mute_semantics_checks(check: Check) -> None:
+    """Mic Mute is an explicit mute; volume Mute without a value stays a toggle. Uses a fake audio service."""
+    sys.path.insert(0, str(SERVER_DIR))
+    from androiddeck.actions import ActionRunner
+    from androiddeck.audio import INPUT, OUTPUT
+
+    calls: list[tuple[str, object]] = []
+
+    class FakeAudio:
+        async def set_mute(self, which, muted):
+            calls.append((which, muted))
+
+    runner = ActionRunner(apps=None, audio=FakeAudio(), media=None, keys=None, allow_commands=False)  # type: ignore[arg-type]
+    cases = [
+        ({"type": "mic", "op": "mute"}, (INPUT, True)),
+        ({"type": "mic", "op": "unmute"}, (INPUT, False)),
+        ({"type": "mic", "op": "toggle"}, (INPUT, None)),
+        ({"type": "mic", "op": "mute", "value": 1.0}, (INPUT, True)),
+        ({"type": "volume", "op": "mute"}, (OUTPUT, None)),
+        ({"type": "volume", "op": "mute", "value": 1.0}, (OUTPUT, True)),
+    ]
+    for action, expected in cases:
+        calls.clear()
+        asyncio.run(runner.run(action))
+        check(calls == [expected], f"{action['type']} {action['op']}{' value' if 'value' in action else ''} → set_mute{expected}", calls)
+
+
+def hold_sequence_checks(check: Check) -> None:
+    """Push-to-talk presses keys in order and releases them in reverse (ydotool, command captured)."""
+    sys.path.insert(0, str(SERVER_DIR))
+    from androiddeck.keyboard import YdotoolBackend
+
+    sent: list[list[str]] = []
+    kb = YdotoolBackend.__new__(YdotoolBackend)
+    kb._run = lambda args: sent.append(args)  # type: ignore[method-assign]
+    kb.hold(["ctrl", "shift", "m"], True)
+    kb.hold(["ctrl", "shift", "m"], False)
+    check(sent == [["key", "29:1", "42:1", "50:1"], ["key", "50:0", "42:0", "29:0"]], "hold presses in order, releases in reverse", sent)
+
+
 def main() -> int:
     # CI consoles (Windows: cp1252) cannot print every character in server logs.
     for stream in (sys.stdout, sys.stderr):
@@ -260,6 +334,9 @@ def main() -> int:
     log_path = home / "server.log"
     env = {**os.environ, "ANDROIDDECK_HOME": str(home), "PYTHONIOENCODING": "utf-8"}
     check = Check()
+    if not args.exe:
+        mute_semantics_checks(check)
+        hold_sequence_checks(check)
     with open(log_path, "w", encoding="utf-8") as log:
         server_cmd = [args.exe, "--console"] if args.exe else [sys.executable, "-m", "androiddeck"]
         proc = subprocess.Popen(

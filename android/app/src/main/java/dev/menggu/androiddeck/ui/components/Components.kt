@@ -1,5 +1,7 @@
 package dev.menggu.androiddeck.ui.components
 
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -59,9 +61,14 @@ import kotlin.math.pow
 // ---- basic building blocks ----------------------------------------------------------------------
 
 @Composable
-fun SectionLabel(text: String, modifier: Modifier = Modifier, trailing: @Composable RowScope.() -> Unit = {}) {
+fun SectionLabel(
+    text: String,
+    modifier: Modifier = Modifier,
+    topPadding: Dp = 20.dp,
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
     Row(
-        modifier.fillMaxWidth().padding(top = 20.dp, bottom = 10.dp),
+        modifier.fillMaxWidth().padding(top = topPadding, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -157,7 +164,7 @@ fun <T> Segmented(
                     .weight(1f)
                     .clip(RoundedCornerShape(12.dp))
                     .background(if (sel) p.surface else Color.Transparent)
-                    .clickable { onSelect(value) }
+                    .selectable(selected = sel, role = Role.Tab) { onSelect(value) }
                     .padding(vertical = 10.dp, horizontal = 6.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
@@ -387,6 +394,16 @@ fun parseHexColor(hex: String?): Color? {
         }
     }.getOrNull()
 }
+
+/** Button color value that follows the highlight color. */
+const val ACCENT_COLOR = "accent"
+
+/**
+ * Resolves a button's stored color. [ACCENT_COLOR] and the original lime "#C6F36B" (the default
+ * deck's Play button and the old lime swatch, both the highlight color at the time) follow [accent].
+ */
+fun buttonColor(value: String?, accent: Color): Color? =
+    if (value == ACCENT_COLOR || value.equals("#C6F36B", ignoreCase = true)) accent else parseHexColor(value)
 
 fun contentColorFor(bg: Color): Color = if (bg.luminance() > 0.45f) Color(0xFF0E1013) else Color.White
 

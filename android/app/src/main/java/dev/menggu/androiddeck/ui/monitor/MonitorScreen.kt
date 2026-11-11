@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,11 +18,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridScope
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,10 +35,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,6 +54,9 @@ import dev.menggu.androiddeck.data.Stats
 import dev.menggu.androiddeck.data.StatsHistory
 import dev.menggu.androiddeck.ui.components.BarMeter
 import dev.menggu.androiddeck.ui.components.DeckCard
+import dev.menggu.androiddeck.ui.components.FitGrid
+import dev.menggu.androiddeck.ui.components.Section
+import dev.menggu.androiddeck.ui.components.SectionColumns
 import dev.menggu.androiddeck.ui.components.RingGauge
 import dev.menggu.androiddeck.ui.components.Sparkline
 import dev.menggu.androiddeck.ui.components.StatusDot
@@ -67,62 +74,67 @@ fun MonitorScreen(vm: DeckViewModel, client: DeckClient) {
     val history by client.history.collectAsStateWithLifecycle()
     val clients by vm.clients.collectAsStateWithLifecycle()
     val servers by vm.servers.collectAsStateWithLifecycle()
-    val full: (LazyGridScope.(@Composable () -> Unit) -> Unit) = { content ->
-        item(span = { GridItemSpan(maxLineSpan) }) { content() }
-    }
+    var topHeight by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
 
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(156.dp),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        if (clients.size > 1) {
-            full {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(servers, key = { it.id }) { s ->
-                        clients[s.id]?.let { c ->
-                            DeviceMini(c, selected = c.id == client.id, onClick = { vm.select(c.id) })
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val viewport = maxHeight
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val s = stats
+            Column(Modifier.onSizeChanged { topHeight = it.height }, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (clients.size > 1) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(servers, key = { it.id }) { srv ->
+                            clients[srv.id]?.let { c ->
+                                DeviceMini(c, selected = c.id == client.id, onClick = { vm.select(c.id) })
+                            }
                         }
                     }
                 }
+                if (s != null) HeaderRow(s)
             }
-        }
-        val s = stats
-        if (s == null) {
-            full {
+            if (s == null) {
                 Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = p.textDim, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                 }
+                return@Column
             }
-            return@LazyVerticalGrid
-        }
-        full { HeaderRow(s) }
-        item {
-            GaugeCard("CPU", s.cpu.percent, p.cpu, listOfNotNull(
-                s.cpu.temp?.let { "${it.roundToInt()}°C" },
-                s.cpu.freq?.let { String.format(Locale.US, "%.1f GHz", it / 1000) },
-            ).joinToString(" · ").ifEmpty { "${s.cpu.cores.size} threads" })
-        }
-        item { GaugeCard("Memory", s.mem.percent, p.mem, "${fmtBytes(s.mem.used)} / ${fmtBytes(s.mem.total)}") }
-        s.gpus.forEachIndexed { i, g ->
-            item(key = "gpu$i") {
-                val sub = listOfNotNull(
-                    if (g.memUsed != null && g.memTotal != null) "${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}" else null,
-                    g.temp?.let { "${it.roundToInt()}°C" },
-                ).joinToString(" · ")
-                GaugeCard(if (s.gpus.size > 1) "GPU ${i + 1}" else "GPU", g.util ?: 0.0, p.gpu, sub, title = g.name)
+            val gauges = buildList<@Composable () -> Unit> {
+                add {
+                    GaugeCard("CPU", s.cpu.percent, p.cpu, listOfNotNull(
+                        s.cpu.temp?.let { "${it.roundToInt()}°C" },
+                        s.cpu.freq?.let { String.format(Locale.US, "%.1f GHz", it / 1000) },
+                    ).joinToString(" · ").ifEmpty { "${s.cpu.cores.size} threads" })
+                }
+                add { GaugeCard("Memory", s.mem.percent, p.mem, "${fmtBytes(s.mem.used)} / ${fmtBytes(s.mem.total)}") }
+                s.gpus.forEachIndexed { i, g ->
+                    add {
+                        val sub = listOfNotNull(
+                            if (g.memUsed != null && g.memTotal != null) "${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal)}" else null,
+                            g.temp?.let { "${it.roundToInt()}°C" },
+                        ).joinToString(" · ")
+                        GaugeCard(if (s.gpus.size > 1) "GPU ${i + 1}" else "GPU", g.util ?: 0.0, p.gpu, sub, title = g.name)
+                    }
+                }
+                s.disks.firstOrNull()?.let { d ->
+                    add { GaugeCard("Disk", d.percent, p.disk, "${fmtBytes(d.used)} / ${fmtBytes(d.total)}", title = d.mount) }
+                }
             }
+            // The gauges are sized to fill the first screen; the detail cards continue below.
+            val gaugeRoom = viewport - with(density) { topHeight.toDp() } - 4.dp - 12.dp - 16.dp
+            FitGrid(count = gauges.size, availableHeight = gaugeRoom) { gauges[it]() }
+            val details = buildList {
+                add(Section("history") { HistoryCard(history) })
+                if (s.cpu.cores.size > 1) add(Section("cores") { CoresCard(s.cpu.cores) })
+                add(Section("network") { NetworkCard(s, history) })
+                if (s.disks.size > 1) add(Section("disks") { DisksCard(s) })
+                if (s.procs.isNotEmpty()) add(Section("procs") { ProcessesCard(s) })
+            }
+            SectionColumns(details, availableHeight = viewport, minColumnWidth = 300.dp, maxColumnWidth = 720.dp, gap = 12.dp)
         }
-        s.disks.firstOrNull()?.let { d ->
-            item { GaugeCard("Disk", d.percent, p.disk, "${fmtBytes(d.used)} / ${fmtBytes(d.total)}", title = d.mount) }
-        }
-        full { HistoryCard(history) }
-        if (s.cpu.cores.size > 1) full { CoresCard(s.cpu.cores) }
-        full { NetworkCard(s, history) }
-        if (s.disks.size > 1) full { DisksCard(s) }
-        if (s.procs.isNotEmpty()) full { ProcessesCard(s) }
     }
 }
 

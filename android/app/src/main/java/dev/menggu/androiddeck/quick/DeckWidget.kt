@@ -54,13 +54,15 @@ import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
 import dev.menggu.androiddeck.data.Net
+import androidx.compose.ui.graphics.Color
 import dev.menggu.androiddeck.data.Prefs
 import dev.menggu.androiddeck.data.Shortcut
 import dev.menggu.androiddeck.ui.components.contentColorFor
-import dev.menggu.androiddeck.ui.components.parseHexColor
+import dev.menggu.androiddeck.ui.components.buttonColor
 import dev.menggu.androiddeck.ui.deck.Symbols
 import dev.menggu.androiddeck.ui.deck.appIconId
 import dev.menggu.androiddeck.ui.theme.DarkPalette
+import dev.menggu.androiddeck.ui.theme.accentColor
 import kotlin.math.max
 
 private val INDEX = ActionParameters.Key<Int>("shortcut_index")
@@ -70,14 +72,17 @@ class DeckWidget : GlanceAppWidget() {
     override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val shortcuts = Prefs(context).loadShortcuts()
-        val glyphs = shortcuts.map { glyphFor(context, it) }
-        provideContent { WidgetBody(shortcuts, glyphs) }
+        val prefs = Prefs(context)
+        val shortcuts = prefs.loadShortcuts()
+        // The widget is always dark; it follows the app's highlight color.
+        val accent = accentColor(prefs.loadSettings().accent, dark = true)
+        val glyphs = shortcuts.map { glyphFor(context, it, accent) }
+        provideContent { WidgetBody(shortcuts, glyphs, accent) }
     }
 
-    private suspend fun glyphFor(context: Context, s: Shortcut): Bitmap? {
+    private suspend fun glyphFor(context: Context, s: Shortcut, accent: Color): Bitmap? {
         val button = s.button
-        val bg = parseHexColor(button.color)
+        val bg = buttonColor(button.color, accent)
         val tint = (if (bg != null) contentColorFor(bg) else DarkPalette.text).toArgb()
         val appId = button.appIconId()
         if (appId != null) {
@@ -101,7 +106,7 @@ class DeckWidget : GlanceAppWidget() {
 }
 
 @Composable
-private fun WidgetBody(shortcuts: List<Shortcut>, glyphs: List<Bitmap?>) {
+private fun WidgetBody(shortcuts: List<Shortcut>, glyphs: List<Bitmap?>, accent: Color) {
     val size = LocalSize.current
     val p = DarkPalette
     Column(
@@ -126,7 +131,7 @@ private fun WidgetBody(shortcuts: List<Shortcut>, glyphs: List<Bitmap?>) {
                 row.forEachIndexed { c, s ->
                     if (c > 0) Spacer(GlanceModifier.width(6.dp))
                     val index = r * columns + c
-                    WidgetTile(s, glyphs.getOrNull(index), index, tileHeight)
+                    WidgetTile(s, glyphs.getOrNull(index), index, tileHeight, accent)
                 }
             }
         }
@@ -134,9 +139,9 @@ private fun WidgetBody(shortcuts: List<Shortcut>, glyphs: List<Bitmap?>) {
 }
 
 @Composable
-private fun RowScope.WidgetTile(s: Shortcut, glyph: Bitmap?, index: Int, height: Float) {
+private fun RowScope.WidgetTile(s: Shortcut, glyph: Bitmap?, index: Int, height: Float, accent: Color) {
     val p = DarkPalette
-    val bg = parseHexColor(s.button.color)
+    val bg = buttonColor(s.button.color, accent)
     val fg = if (bg != null) contentColorFor(bg) else p.text
     Box(
         GlanceModifier

@@ -151,6 +151,10 @@ class PointerService:
         if keys:
             self._push("combo", list(keys)[:8])
 
+    def hold(self, keys: list[str], down: bool) -> None:
+        if keys:
+            self._push("hold", list(keys)[:8], bool(down))
+
     def _take(self, idx_x: int, value_x: float, value_y: float) -> tuple[int, int]:
         x = value_x + self._frac[idx_x]
         y = value_y + self._frac[idx_x + 1]
@@ -171,11 +175,13 @@ class PointerService:
 
     def _apply(self, ev: list[Any]) -> None:
         kind = ev[0]
-        if kind in ("type", "combo"):
+        if kind in ("type", "combo", "hold"):
             if self.keys is None:
                 return
             if kind == "type":
                 self.keys.type_text(ev[1])
+            elif kind == "hold":
+                self.keys.hold(ev[1], ev[2])
             else:
                 self.keys.combo(ev[1])
             return

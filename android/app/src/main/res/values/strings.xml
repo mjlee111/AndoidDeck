@@ -3,6 +3,8 @@
     <string name="app_name">AndroidDeck</string>
     <string name="widget_label">Deck buttons</string>
     <string name="widget_description">Buttons you pinned in AndroidDeck</string>
+    <string name="controls_widget_label">PC controls</string>
+    <string name="controls_widget_description">Volume, mic, media and CPU/RAM for your PC</string>
     <string name="tile_1">Deck 1</string>
     <string name="tile_2">Deck 2</string>
     <string name="tile_3">Deck 3</string>

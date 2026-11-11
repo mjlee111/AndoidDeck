@@ -168,6 +168,7 @@ class DeckClient(server: SavedServer, private val scope: CoroutineScope) {
             if (webSocket !== socket) return
             if (response?.code == 401) {
                 socket = null
+                clearLiveState()
                 running = false
                 _state.value = ConnState.Unauthorized
                 return
@@ -178,6 +179,7 @@ class DeckClient(server: SavedServer, private val scope: CoroutineScope) {
 
     private fun connectionLost(reason: String) {
         socket = null
+        clearLiveState()
         if (!running) {
             _state.value = ConnState.Idle
             return
@@ -190,6 +192,14 @@ class DeckClient(server: SavedServer, private val scope: CoroutineScope) {
             delay(wait)
             if (running && socket == null) open()
         }
+    }
+
+    /** Unknown until the next welcome: a PC that is off or rebooting reports nothing. */
+    private fun clearLiveState() {
+        _volume.value = VolumeState()
+        _mic.value = VolumeState()
+        _media.value = MediaState()
+        _mixer.value = MixerState()
     }
 
     private fun subscribeMessage(): String =
@@ -267,6 +277,15 @@ class DeckClient(server: SavedServer, private val scope: CoroutineScope) {
     fun scroll(dx: Float, dy: Float) = raw("""{"t":"scroll","dx":${fmt(dx)},"dy":${fmt(dy)}}""")
     fun click(button: String, count: Int = 1) = raw("""{"t":"click","button":"$button","count":$count}""")
     fun mouseButton(button: String, down: Boolean) = raw("""{"t":"button","button":"$button","down":$down}""")
+    /** Presses (down) or releases a key combo on the PC; the PC releases it if the phone disconnects. */
+    fun holdKeys(keys: List<String>, down: Boolean) = raw(
+        buildJsonObject {
+            put("t", "hold")
+            put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+            put("down", down)
+        }.toString(),
+    )
+
     fun typeText(text: String) = raw(buildJsonObject { put("t", "type"); put("text", text) }.toString())
     fun keyCombo(keys: List<String>) = raw(
         buildJsonObject { put("t", "key"); put("keys", JsonArray(keys.map { JsonPrimitive(it) })) }.toString(),
@@ -357,6 +376,15 @@ class DeckClient(server: SavedServer, private val scope: CoroutineScope) {
             }
 
         /** Stateless action call used by the home-screen widget and quick-settings tiles. */
+        /** Volume, mic, media and CPU/RAM in one request, for widgets that cannot keep a socket open. */
+        suspend fun fetchState(server: SavedServer): Result<LiveState> = withContext(Dispatchers.IO) {
+            runCatching {
+                Net.register(server)
+                val req = Request.Builder().url("${Net.baseUrl(server.host, server.port)}/api/state").get().build()
+                execute(Net.clientFor(server.host, server.port), req) { DeckJson.decodeFromString(LiveState.serializer(), it) }
+            }
+        }
+
         suspend fun runOnce(server: SavedServer, action: DeckAction): Result<Unit> = withContext(Dispatchers.IO) {
             runCatching {
                 Net.register(server)

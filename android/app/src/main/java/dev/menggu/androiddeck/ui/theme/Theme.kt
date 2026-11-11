@@ -12,7 +12,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -51,7 +54,7 @@ val DarkPalette = DeckPalette(
     outline = Color(0xFF2C303A),
     text = Color(0xFFF3F4F6),
     textDim = Color(0xFF9197A4),
-    textFaint = Color(0xFF5D6371),
+    textFaint = Color(0xFF7D8391),
     accent = Color(0xFFC6F36B),
     onAccent = Color(0xFF111A04),
     danger = Color(0xFFFF6B6B),
@@ -74,7 +77,7 @@ val LightPalette = DeckPalette(
     outline = Color(0xFFDADDE3),
     text = Color(0xFF0F1115),
     textDim = Color(0xFF5F6675),
-    textFaint = Color(0xFF9AA0AC),
+    textFaint = Color(0xFF6F7582),
     accent = Color(0xFFB4EB4D),
     onAccent = Color(0xFF111A04),
     danger = Color(0xFFE5484D),
@@ -89,6 +92,76 @@ val LightPalette = DeckPalette(
 )
 
 val LocalPalette = staticCompositionLocalOf { DarkPalette }
+
+/** A highlight color offered in Settings; [light] is the value used with the light theme. */
+@Immutable
+data class AccentPreset(val id: String, val label: String, val dark: Color, val light: Color)
+
+const val DEFAULT_ACCENT = "lime"
+
+val AccentPresets = listOf(
+    AccentPreset(DEFAULT_ACCENT, "Lime", DarkPalette.accent, LightPalette.accent),
+    AccentPreset("sky", "Sky", Color(0xFF7CC4FF), Color(0xFF4DA8F5)),
+    AccentPreset("violet", "Violet", Color(0xFFB794FF), Color(0xFF9D7BF2)),
+    AccentPreset("coral", "Coral", Color(0xFFFF8F7A), Color(0xFFF7735C)),
+    AccentPreset("amber", "Amber", Color(0xFFFFC857), Color(0xFFF5B83D)),
+    AccentPreset("mint", "Mint", Color(0xFF5BE4B5), Color(0xFF3CCF9E)),
+    AccentPreset("pink", "Pink", Color(0xFFFF8AD8), Color(0xFFF06CC6)),
+    AccentPreset("mono", "Mono", Color(0xFFECEEF2), Color(0xFF1F2229)),
+)
+
+/** Highlight color for a stored setting (preset id or custom "#RRGGBB"); unknown values fall back to lime. */
+fun accentColor(setting: String, dark: Boolean): Color {
+    AccentPresets.firstOrNull { it.id == setting }?.let { return if (dark) it.dark else it.light }
+    return parseAccentHex(setting) ?: if (dark) DarkPalette.accent else LightPalette.accent
+}
+
+/** "#RRGGBB" (or "RRGGBB") to an opaque color; null if malformed. */
+fun parseAccentHex(text: String): Color? {
+    val s = text.trim().removePrefix("#")
+    if (s.length != 6) return null
+    val v = s.toLongOrNull(16) ?: return null
+    return Color(0xFF000000 or v)
+}
+
+fun Color.toHex(): String = "#%06X".format(toArgb() and 0xFFFFFF)
+
+/** WCAG contrast ratio between two colors. */
+fun contrast(a: Color, b: Color): Float {
+    val la = a.luminance()
+    val lb = b.luminance()
+    return (maxOf(la, lb) + 0.05f) / (minOf(la, lb) + 0.05f)
+}
+
+/**
+ * The highlight for a filled bar on [track]: darkened (light theme) or lightened (dark theme) just
+ * enough to stand out from the track by 3:1, so the level is readable with any highlight color.
+ */
+fun DeckPalette.accentOn(track: Color): Color {
+    var c = accent
+    val toward = if (isDark) Color.White else Color.Black
+    var i = 0
+    while (contrast(c, track) < 3f && i < 24) {
+        c = androidx.compose.ui.graphics.lerp(c, toward, 0.06f)
+        i++
+    }
+    return c
+}
+
+/** Near-black or white, whichever has the higher contrast on [bg]. */
+fun onColorFor(bg: Color): Color {
+    val l = bg.luminance()
+    val ink = Color(0xFF0E1013)
+    val onWhite = 1.05f / (l + 0.05f)
+    val onInk = (l + 0.05f) / (ink.luminance() + 0.05f)
+    return if (onInk >= onWhite) ink else Color.White
+}
+
+private fun DeckPalette.withAccent(setting: String): DeckPalette {
+    if (setting == DEFAULT_ACCENT) return this
+    val c = accentColor(setting, isDark)
+    return copy(accent = c, onAccent = onColorFor(c))
+}
 
 private fun DeckPalette.toScheme(): ColorScheme {
     val base = if (isDark) darkColorScheme() else lightColorScheme()
@@ -136,13 +209,13 @@ private val DeckTypography = Typography().let { t ->
 }
 
 @Composable
-fun DeckTheme(themeMode: Int, content: @Composable () -> Unit) {
+fun DeckTheme(themeMode: Int, accent: String = DEFAULT_ACCENT, content: @Composable () -> Unit) {
     val dark = when (themeMode) {
         1 -> true
         2 -> false
         else -> isSystemInDarkTheme()
     }
-    val palette = if (dark) DarkPalette else LightPalette
+    val palette = remember(dark, accent) { (if (dark) DarkPalette else LightPalette).withAccent(accent) }
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {

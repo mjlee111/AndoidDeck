@@ -77,6 +77,7 @@ class Client:
         self.record = record  # entry in Config.devices; gone once the phone is unpaired
         self.stats = False
         self.mixer = False
+        self.held: list[tuple[str, ...]] = []  # key combos held down by this phone
         self._lock = asyncio.Lock()
 
     async def send(self, msg: dict[str, Any]) -> None:
@@ -138,6 +139,8 @@ class DeckServer:
             "mixer": self.audio.ready and self.audio.mixer is not None,
             "media": self.media.supported,
             "commands": self.cfg.allow_commands,
+            # Push-to-talk: hold a key combo down while a button is pressed ("hold" messages).
+            "hold": self.keys is not None,
         }
 
     def drop_unpaired(self) -> None:
@@ -180,6 +183,7 @@ class DeckServer:
         app.router.add_get("/api/apps", self.h_apps)
         app.router.add_get("/api/icon/{id}", self.h_icon)
         app.router.add_get("/api/media/art", self.h_art)
+        app.router.add_get("/api/state", self.h_state)
         app.router.add_get("/api/profile", self.h_get_profile)
         app.router.add_put("/api/profile", self.h_put_profile)
         app.router.add_post("/api/action", self.h_action)
@@ -219,6 +223,23 @@ class DeckServer:
 
     async def h_root(self, _r: web.Request) -> web.Response:
         return web.Response(text=f"AndroidDeck server {__version__} is running.\n")
+
+    async def h_state(self, _r: web.Request) -> web.Response:
+        """One-shot live state for home-screen widgets (they cannot keep a WebSocket open)."""
+        loop = asyncio.get_running_loop()
+        try:
+            stats = await loop.run_in_executor(None, self.monitor.sample)
+            usage = {"cpu": stats["cpu"]["percent"], "mem": stats["mem"]["percent"]}
+        except Exception:  # noqa: BLE001
+            usage = None
+        media = self._last.get("media") or {}
+        return web.json_response({
+            "name": self.cfg.name,
+            "volume": await self.audio.get(),
+            "mic": await self.audio.get_mic(),
+            "media": {k: media.get(k) for k in ("available", "playing", "title", "artist", "source")},
+            "usage": usage,
+        })
 
     async def h_info(self, _r: web.Request) -> web.Response:
         return web.json_response(self.info())
@@ -335,6 +356,10 @@ class DeckServer:
                     break
         finally:
             self.clients.pop(ws, None)
+            # Never leave a push-to-talk key down when the phone goes away.
+            for combo in reversed(client.held):
+                self.pointer.hold(list(combo), False)
+            client.held.clear()
             log.info("Disconnected: %s", client.device)
         return ws
 
@@ -366,6 +391,17 @@ class DeckServer:
                 if isinstance(keys, list):
                     normalize_combo([str(k) for k in keys])
                     self.pointer.combo([str(k) for k in keys])
+            elif t == "hold":
+                keys = [str(k) for k in (data.get("keys") or [])][:8]
+                normalize_combo(keys)
+                down = bool(data.get("down"))
+                combo = tuple(keys)
+                if down and combo not in client.held:
+                    client.held.append(combo)
+                    self.pointer.hold(keys, True)
+                elif not down and combo in client.held:
+                    client.held.remove(combo)
+                    self.pointer.hold(keys, False)
             elif t == "ping":
                 await client.send({"t": "pong"})
         except (TypeError, ValueError) as e:
